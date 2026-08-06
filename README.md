@@ -1,211 +1,200 @@
-LLM Council
+# LLM Council
 
-A local multi-model review application for architecture documents, detaileddesigns, source code, technical decisions and general questions.
+A local multi-model review application for architecture documents, detailed designs, source code, technical decisions, and general questions.
 
-The application runs a three-stage council:
+Multiple LLMs independently answer your question, anonymously peer-review each other's answers, and a Chairman model synthesizes the final response — so no single model's opinion (or bias) determines the answer. Runs entirely on your machine except for whichever cloud providers you explicitly enable.
 
-Selected models independently answer the request.
+**OpenRouter is not used.** All cloud calls go directly to the provider's own API.
 
-The models review and rank the anonymised answers.
+---
 
-A selected Chairman produces the final synthesis.
+## Table of contents
 
-This version supports:
+- [How the council works](#how-the-council-works)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Project structure](#project-structure)
+- [Requirements](#requirements)
+- [Installation (macOS, Conda)](#installation-macos-conda)
+- [Configuration](#configuration)
+- [Running the application](#running-the-application)
+- [Using the UI](#using-the-ui)
+- [Example review prompts](#example-review-prompts)
+- [API reference](#api-reference)
+- [Data handling and privacy](#data-handling-and-privacy)
+- [Troubleshooting](#troubleshooting)
+- [Development checks](#development-checks)
+- [Known limitations](#known-limitations)
+- [Stopping the application](#stopping-the-application)
+- [Attribution](#attribution)
 
-locally downloaded models through Ollama;
+---
 
-dynamic Ollama model discovery with no Python changes after ollama pull;
+## How the council works
 
-direct calls to OpenAI, Anthropic, Google Gemini and xAI;
+```mermaid
+flowchart TD
+    Q["User question<br/>(+ prior conversation turns, if any)"] --> S1
 
-per-request council member and Chairman selection;
+    S1["<b>Stage 1 — Independent Answers</b><br/>every selected model answers in parallel"] --> S2
+    S2["<b>Stage 2 — Anonymous Peer Review</b><br/>each model ranks the other responses,<br/>labeled 'Response A / B / C…' so no model<br/>knows whose answer it's grading"] --> AGG
+    AGG["Aggregate Rankings<br/>averaged across all reviewers"] --> S3
+    S3["<b>Stage 3 — Chairman Synthesis</b><br/>one selected model writes the final answer<br/>using every response + every ranking"] --> A
 
-an animated UI showing Answer, Review and Synthesis progress;
+    A["Final answer<br/>shown to you + saved to conversation history"]
+    AGG -. persisted to disk .-> REC[("Recommendation engine<br/>learns which models rank best<br/>per question type, over time")]
+```
 
-local JSON conversation history; and
+For **N** selected council models, one turn makes `2N + 1` model calls (N answers + N reviews + 1 synthesis), plus one extra call the first time a conversation is titled. Failed calls, retries, and provider-specific behavior can change the exact count — a failed model is simply excluded from that stage rather than failing the whole request.
 
-server-sent events for real backend progress updates.
+Every stage also receives the conversation's prior turns as real context (see [Conversation memory](#features) below), so follow-up questions aren't answered cold.
 
-OpenRouter is not used.
+## Features
 
-How the council works
+- **Three-stage deliberation** — independent answers → anonymous peer review → Chairman synthesis (above)
+- **Conversation memory** — follow-up questions carry the full prior conversation into every stage, using each turn's Chairman answer as context
+- **Self-learning model recommendations** — as you type a question, if similar past questions exist in your history, the app suggests the models that have actually ranked best for that topic *in your own council's peer review* — never a hardcoded opinion about which model is "best," and it says nothing until there's real data behind it
+- **Local models via Ollama** — dynamic model discovery (`ollama pull` a model and it shows up after a refresh, no code changes)
+- **Direct cloud provider calls** — OpenAI, Anthropic, Google Gemini, and xAI, each via their own SDK
+- **Per-request council & Chairman selection** — pick a different mix of models for any given question
+- **Live council flow visualization** — animated Answer → Review → Synthesis progress via server-sent events
+- **Per-model response timing** shown next to every response
+- **Cancel & retry** — stop an in-flight council run, or retry one that failed
+- **Conversation management** — search, rename, and delete conversations
+- **Export to Markdown** — download a full conversation (all three stages) as a `.md` file
+- **Syntax-highlighted code blocks** with one-click copy, plus a copy button on the final answer
+- **Responsive UI** — collapsible sidebar drawer on mobile
+- **Local JSON conversation history**, stored under `data/conversations/`
 
-For every question, the backend performs the following workflow:
+## Architecture
 
-User request
-     |
-     +--> Stage 1: independent answer from every selected model
-     |
-     +--> Stage 2: anonymous peer review and ranking
-     |
-     +--> Stage 3: Chairman synthesis
-     |
-     +--> Final answer
+```mermaid
+flowchart LR
+    subgraph Browser
+        UI["React / Vite UI<br/>conversations · model selector<br/>Chairman selector · live council flow"]
+    end
 
-For N selected models, a normal council run makes:
+    UI <-->|"HTTP + Server-Sent Events"| API
 
-N answer calls + N review calls + 1 synthesis call = 2N + 1 calls
+    subgraph Backend["FastAPI backend — http://127.0.0.1:8001"]
+        API["API layer<br/>validation, streaming"]
+        Council["Three-stage council<br/>orchestration"]
+        Rec["Recommendation engine<br/>classify_question + history lookup"]
+        Store[("Async JSON storage<br/>data/conversations/")]
 
-For three models:
+        API --> Council
+        API --> Rec
+        Council --> Store
+        Rec --> Store
+    end
 
-(2 × 3) + 1 = 7 model calls
+    Council --> Ollama["Local Ollama"]
+    Council --> Cloud["Direct cloud APIs<br/>OpenAI · Anthropic · Gemini · xAI"]
+```
 
-Title generation may make one additional call. Failed calls, retries andprovider-specific behaviour can also change the final number.
+## Project structure
 
-Architecture
-
-React/Vite UI
-  - conversations
-  - council model selector
-  - Chairman selector
-  - live council flow
-        |
-        | HTTP + server-sent events
-        v
-FastAPI backend — http://127.0.0.1:8001
-  - model catalogue
-  - request validation
-  - three-stage orchestration
-  - conversation storage
-        |
-        +------------------+-----------------------------+
-        |                  |                             |
-        v                  v                             v
-Local Ollama       Direct cloud APIs              Local JSON files
-                  OpenAI / Anthropic /            data/conversations/
-                  Gemini / xAI
-
-Project structure
-
-LLM_Council/
+```text
+LLM_council/
 ├── backend/
 │   ├── __init__.py
-│   ├── main.py                 # FastAPI endpoints and streamed events
-│   ├── config.py               # Environment and model configuration
-│   ├── providers.py            # Cloud routing and Ollama discovery
-│   ├── council.py              # Three-stage council workflow
-│   └── storage.py              # Local conversation persistence
+│   ├── main.py            # FastAPI endpoints, request validation, SSE streaming
+│   ├── config.py          # Environment and model configuration
+│   ├── providers.py       # Cloud provider clients + Ollama discovery
+│   ├── council.py         # 3-stage orchestration, classifier, recommendations
+│   └── storage.py         # Async, lock-safe local conversation persistence
 ├── frontend/
 │   ├── package.json
 │   └── src/
-│       ├── App.jsx             # Main state and streamed progress handling
-│       ├── api.js              # Backend API client
-│       ├── App.css
+│       ├── App.jsx                    # Top-level state, streamed progress handling
+│       ├── api.js                     # Backend API client
+│       ├── App.css / index.css
 │       ├── components/
-│       │   ├── ChatInterface.jsx
-│       │   ├── CouncilFlow.jsx
-│       │   ├── CouncilFlow.css
-│       │   ├── Sidebar.jsx
-│       │   └── Sidebar.css
+│       │   ├── ChatInterface.jsx      # Message list, input, suggestion banner
+│       │   ├── CouncilFlow.jsx        # Live Answer/Review/Synthesis visualization
+│       │   ├── Sidebar.jsx            # Model selector + conversation list
+│       │   ├── Stage1.jsx / Stage2.jsx / Stage3.jsx
+│       │   ├── Markdown.jsx           # Shared renderer: syntax highlight + copy
+│       │   └── CopyButton.jsx
 │       └── utils/
-│           └── modelDisplay.js  # Shared provider/model-name formatting
+│           ├── modelDisplay.js        # provider:model-name formatting
+│           └── exportConversation.js  # Markdown export
 ├── data/
-│   └── conversations/          # Created automatically
-├── .env                        # Local configuration and secrets
-├── .env.example                # Safe configuration template
+│   └── conversations/     # Created automatically, one JSON file per conversation
+├── .env                   # Local configuration and secrets (not committed)
+├── .env.example           # Safe configuration template
 ├── .gitignore
 ├── pyproject.toml
 └── README.md
+```
 
-Requirements
+## Requirements
 
-macOS
+- macOS
+- Conda or Miniconda
+- Python 3.10+
+- Node.js and npm
+- [Ollama](https://ollama.com) for local models
+- API credentials, only for whichever cloud providers you choose to enable
 
-Conda or Miniconda
+Check what's installed:
 
-Python 3.10 or later
-
-Node.js and npm
-
-Ollama for local models
-
-API credentials only for the cloud providers you choose to enable
-
-Check the installed tools:
-
+```bash
 conda --version
 python --version
 node --version
 npm --version
 ollama --version
+```
 
-Installation on macOS with Conda
+## Installation (macOS, Conda)
 
-1. Open the project
+### 1. Get the project
 
-Clone the repository if it is not already available locally:
-
+```bash
 git clone https://github.com/mltakeover/LLM_council.git
 cd LLM_council
+```
 
-If the repository has already been cloned, open a terminal and change to itsroot directory:
+If you already have it cloned, just `cd` into the repo root — all commands below assume you're there.
 
-cd /path/to/LLM_council
+### 2. Create the environment
 
-All remaining commands assume the current directory is the repository root.
-
-2. Create or activate the environment
-
-Create it if needed:
-
+```bash
 conda create -n LLM_Council python=3.11 -y
-
-Activate it:
-
 conda activate LLM_Council
+```
 
-3. Configure Python packaging
+### 3. Install the backend
 
-Use the following pyproject.toml:
+The repo's `pyproject.toml` already excludes the `frontend/` directory from Python packaging (`[tool.setuptools.packages.find]` only includes `backend*`), so this is a normal editable install:
 
-[build-system]
-requires = ["setuptools>=77.0.3"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "llm-council"
-version = "0.1.0"
-description = "Your LLM Council"
-readme = "README.md"
-requires-python = ">=3.10"
-
-dependencies = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.32.0",
-    "python-dotenv>=1.0.0",
-    "httpx>=0.27.0",
-    "pydantic>=2.9.0",
-    "openai>=1.55.0",
-    "anthropic>=0.40.0",
-    "google-genai>=1.0.0",
-]
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["backend*"]
-exclude = ["frontend*"]
-
-The package-discovery section prevents setuptools from trying to package theReact frontend directory as a Python package.
-
-Install the backend in editable mode:
-
+```bash
 python -m pip install --upgrade pip
 python -m pip install -e .
+```
 
-Verify the imports:
+Verify it worked:
 
+```bash
 python -c "import backend, openai, anthropic; from google import genai; print('Backend dependencies installed')"
+```
 
-4. Install the frontend
+### 4. Install the frontend
 
+```bash
 cd frontend
 npm install
 cd ..
+```
 
-Local Ollama configuration
+## Configuration
 
-The recommended starting configuration is local-only. Create .env in theproject root:
+### Local Ollama (recommended starting point)
 
+Create `.env` in the project root:
+
+```env
 COUNCIL_PROVIDERS=ollama
 
 OLLAMA_BASE_URL=http://127.0.0.1:11434/v1/
@@ -217,47 +206,26 @@ OLLAMA_MAX_CONCURRENCY=1
 OLLAMA_DISCOVERY_TIMEOUT=5
 REQUEST_TIMEOUT=600
 TITLE_TIMEOUT=120
+```
 
-OLLAMA_MODELS supplies only the initial defaults. It is not a fixed allowlist.The UI obtains the current catalogue directly from Ollama.
+`OLLAMA_MODELS` only sets the *initial* defaults — it's not an allowlist. The UI reads the live catalogue straight from Ollama, so a newly-pulled model just needs a **Refresh** click in the sidebar.
 
-Start and check Ollama
+Make sure Ollama is actually running:
 
-The Ollama macOS application normally starts the local service. Check it with:
+```bash
+ollama list          # should succeed without error
+ollama serve          # only if nothing is listening on 11434 yet
+```
 
-ollama list
+Don't run a second `ollama serve` if the macOS Ollama app already has the service running.
 
-If nothing is running on port 11434, start it with:
+**Adding a new local model:** `ollama pull MODEL_NAME`, then in the UI: expand **Council Models** → **Refresh** → select it. No backend restart needed — selections persist in the browser's local storage. Ollama entries tagged as *cloud* models show up but stay disabled, so the "local" selector can't accidentally present a remote call as local processing.
 
-ollama serve
+### Direct cloud providers (optional)
 
-Do not start a second ollama serve process if the macOS application alreadyhas the service running.
+Add credentials only for what you intend to use:
 
-Add any downloaded Ollama model
-
-Pull a model normally:
-
-ollama pull MODEL_NAME
-
-Then:
-
-Open the LLM Council UI.
-
-Expand Council Models.
-
-Click Refresh.
-
-Select the new model.
-
-Select the Chairman from the chosen council members.
-
-No Python edit or backend restart is required. Model choices are saved in thebrowser's local storage.
-
-Ollama entries identified as cloud models are visible but disabled. This keepsthe local model selector from presenting a remote service as local processing.
-
-Direct cloud-provider configuration
-
-Cloud providers are optional. Add only the credentials you intend to use:
-
+```env
 OPENAI_API_KEY=replace-with-a-real-key
 ANTHROPIC_API_KEY=replace-with-a-real-key
 GEMINI_API_KEY=replace-with-a-real-key
@@ -270,84 +238,29 @@ XAI_MODEL=your-valid-grok-model-id
 
 COUNCIL_PROVIDERS=ollama,openai,anthropic,google,xai
 CHAIRMAN_PROVIDER=ollama
+```
 
-Model identifiers must be valid for the corresponding provider account. Modelnames and account availability can change, so the README deliberately does notassume a particular current cloud model.
+Model identifiers must be valid for your account — model names and availability change over time, so this README deliberately doesn't hardcode a "current" model to point at.
 
-Supported provider values are:
+| Provider value | Credential | Model setting | Connection |
+|---|---|---|---|
+| `ollama` | none | selected in the UI | local Ollama API |
+| `openai` | `OPENAI_API_KEY` | `OPENAI_MODEL` | OpenAI SDK |
+| `anthropic` | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` | Anthropic SDK |
+| `google` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | `GEMINI_MODEL` | Google GenAI SDK |
+| `xai` | `XAI_API_KEY` | `XAI_MODEL` | xAI (OpenAI-compatible API) |
 
-Provider value
+**Why a cloud model might not appear:** the backend only exposes a provider once it detects a real-looking key — placeholder-ish values like `your-openai-key` or a blank string are treated as *not configured*. After adding real credentials: stop Uvicorn (`Ctrl+C`), restart it, then click **Refresh** in the sidebar. `--reload` does not pick up `.env` changes.
 
-Credential
+`COUNCIL_PROVIDERS` only controls the *initial default* council — a configured cloud model can still be selected manually even if it isn't in that list.
 
-Model setting
+**Never paste API keys into chat, source code, screenshots, or documentation.**
 
-Connection
+### Protect secrets and local data
 
-ollama
+At minimum, `.gitignore` should contain:
 
-None
-
-Selected in the UI
-
-Local Ollama API
-
-openai
-
-OPENAI_API_KEY
-
-OPENAI_MODEL
-
-OpenAI SDK
-
-anthropic
-
-ANTHROPIC_API_KEY
-
-ANTHROPIC_MODEL
-
-Anthropic SDK
-
-google
-
-GEMINI_API_KEY or GOOGLE_API_KEY
-
-GEMINI_MODEL
-
-Google GenAI SDK
-
-xai
-
-XAI_API_KEY
-
-XAI_MODEL
-
-xAI OpenAI-compatible API
-
-Why cloud models may not appear
-
-The backend only exposes a cloud provider when it detects a real-looking APIkey. These values are intentionally treated as unconfigured:
-
-OPENAI_API_KEY=your-openai-key
-ANTHROPIC_API_KEY=your-anthropic-key
-
-Blank values and recognised placeholders are also rejected. After adding realcredentials:
-
-Stop Uvicorn with Ctrl+C.
-
-Restart the backend.
-
-Click Refresh in the sidebar.
-
-Do not rely on --reload to detect an .env change.
-
-COUNCIL_PROVIDERS controls the initial default council. A cloud model with aconfigured key can still appear in the selector even when it is not included inthat setting. Existing browser selections can be changed manually.
-
-Never paste API keys into chat, source code, screenshots or documentation.
-
-Protect secrets and local data
-
-Use a .gitignore containing at least:
-
+```gitignore
 .env
 .env.*
 !.env.example
@@ -356,362 +269,229 @@ __pycache__/
 .DS_Store
 frontend/node_modules/
 data/conversations/
+```
 
-Do not commit .env. If a key is exposed, revoke it through the relevantprovider account and create a replacement.
+Never commit `.env`. If a key leaks, revoke it in the provider's dashboard and issue a replacement.
 
-Running the application
+## Running the application
 
-Run the backend and frontend in separate terminal windows.
+Run the backend and frontend in separate terminals.
 
-Terminal 1 — backend
+**Terminal 1 — backend**
 
+```bash
 conda activate LLM_Council
-
 cd /path/to/LLM_council
 
-python -m uvicorn backend.main:app \
-  --reload \
-  --host 127.0.0.1 \
-  --port 8001
+python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8001
+```
 
-The frontend expects port 8001. Uvicorn's default port is 8000, so omitting--port 8001 will prevent the UI from reaching this backend.
+The frontend expects port **8001** — Uvicorn's default is 8000, so leaving off `--port 8001` will break the connection. You should see:
 
-Expected output includes:
-
+```text
 Uvicorn running on http://127.0.0.1:8001
 Application startup complete.
+```
 
-Terminal 2 — frontend
+**Terminal 2 — frontend**
 
-From the repository root:
-
+```bash
 cd frontend
 npm run dev
+```
 
-Open the URL displayed by Vite, normally:
+Open the URL Vite prints (usually `http://localhost:5173` — it'll pick 5174 or another port if 5173 is busy; the backend's CORS config accepts any local `localhost`/`127.0.0.1` port).
 
-http://localhost:5173
+## Using the UI
 
-Vite may choose 5174 or another local port if 5173 is occupied. The backend CORSconfiguration accepts local localhost and 127.0.0.1 browser origins on anyport.
+1. Start Ollama (if using local models), then the backend, then the frontend.
+2. Click **New Conversation**.
+3. Expand **Council Models**, select one or more.
+4. Choose a **Chairman** from the selected models.
+5. Type your question and submit — if a similar past question exists, you may see a model suggestion banner first.
 
-Using the UI
+The live flow panel shows each stage as **Waiting → In progress → Completed / Failed**, then connects the results into the Chairman's synthesis. Collapse it any time with **Hide flow**.
 
-Start Ollama if local models will be used.
+## Example review prompts
 
-Start the backend on port 8001.
-
-Start the frontend.
-
-Click New Conversation.
-
-Expand Council Models.
-
-Select one or more available models.
-
-Choose a Chairman from the selected models.
-
-Enter the review request and submit it.
-
-The live flow displays:
-
-Waiting before a stage starts;
-
-In progress while the backend is waiting for a model;
-
-Completed after a successful response; and
-
-Failed when a selected model does not return a usable response.
-
-The flow then connects the council results to the Chairman for final synthesis.It can be collapsed with Hide flow.
-
-Example review prompts
-
-HLD review
-
+**HLD review**
+```text
 Review this HLD as a technical design authority. Identify architectural gaps,
 security risks, scalability concerns, missing non-functional requirements,
 assumptions, dependencies and open questions. Separate confirmed findings from
 recommendations and prioritise the findings by severity.
+```
 
-LLD review
-
+**LLD review**
+```text
 Review this LLD for correctness, maintainability, resilience, security,
 observability and operational support. Provide prioritised findings with
 evidence, impact and recommended remediation.
+```
 
-Code review
-
+**Code review**
+```text
 Review this code for functional defects, security weaknesses, concurrency risks,
 error-handling gaps, test gaps and unnecessary complexity. Do not claim a defect
 unless it is supported by the supplied code.
+```
 
-API verification
+## API reference
 
-Health check
+Interactive docs: **http://127.0.0.1:8001/docs**
 
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/` | Health check |
+| `GET` | `/api/models` | Discovered Ollama models + configured cloud models |
+| `POST` | `/api/recommend-models` | Suggest models for a question, from past peer-review history |
+| `GET` | `/api/conversations` | List conversations (metadata only) |
+| `POST` | `/api/conversations` | Create a conversation |
+| `GET` | `/api/conversations/{id}` | Full conversation, all stages |
+| `PATCH` | `/api/conversations/{id}` | Rename |
+| `DELETE` | `/api/conversations/{id}` | Delete |
+| `POST` | `/api/conversations/{id}/message` | Run the council, return all stages at once |
+| `POST` | `/api/conversations/{id}/message/stream` | Same, streamed via SSE |
+
+Quick checks:
+
+```bash
 curl http://127.0.0.1:8001/
-
-Expected response:
-
-{"status":"ok","service":"LLM Council API"}
-
-Model catalogue
+# {"status":"ok","service":"LLM Council API"}
 
 curl -s http://127.0.0.1:8001/api/models | python -m json.tool
 
-The response shows:
+curl -i -X POST http://127.0.0.1:8001/api/conversations \
+  -H "Content-Type: application/json" -d '{}'
+```
 
-dynamically discovered Ollama models;
+## Data handling and privacy
 
-configured cloud models;
+- **Local Ollama models:** request path is `Browser → local FastAPI backend → local Ollama service` — nothing leaves your machine.
+- **Cloud models:** request path is `Browser → local FastAPI backend → selected cloud provider`. Removing OpenRouter removes that intermediary, but it does **not** make cloud requests local, and it doesn't by itself establish any retention or training policy — check each provider's current terms before sending confidential HLDs, LLDs, source code, or personal/client data.
+- Conversation history is stored **unencrypted** under `data/conversations/`. Protect the machine, project directory, and any backups accordingly.
 
-whether each model is selectable;
+## Troubleshooting
 
-startup defaults;
+<details>
+<summary><strong>Cloud models don't appear</strong></summary>
 
-the default Chairman; and
-
-whether Ollama was reachable.
-
-The endpoint exposes model information, not API-key values.
-
-Create a test conversation
-
-curl -i -X POST \
-  http://127.0.0.1:8001/api/conversations \
-  -H "Content-Type: application/json" \
-  -d '{}'
-
-A successful response returns HTTP 200 and a JSON conversation object.
-
-API documentation
-
-Open:
-
-http://127.0.0.1:8001/docs
-
-Data handling and privacy
-
-With local Ollama models only, the model request path is:
-
-Browser -> local FastAPI backend -> local Ollama service
-
-When a cloud model is selected, its request path is:
-
-Browser -> local FastAPI backend -> selected cloud provider
-
-Removing OpenRouter removes that intermediary. It does not keep requests localwhen a cloud model is selected, and it does not by itself establish a particularretention or training policy. Confirm the current contractual and data-handlingterms for every provider account before sending confidential HLDs, LLDs, sourcecode, personal data or client information.
-
-Conversation history is stored locally under:
-
-data/conversations/
-
-These JSON files are not encrypted by this application. Protect the Mac account,project directory and backups appropriately.
-
-Troubleshooting
-
-Cloud models do not appear
-
-Check what the backend considers configured without printing any secret:
-
+```bash
 python -c "from backend.config import AVAILABLE_CLOUD_MODELS; print(AVAILABLE_CLOUD_MODELS)"
+```
 
-If this prints []:
+If this prints `[]`: confirm `.env` is in the project root next to `pyproject.toml`, replace placeholder keys with real ones, start Uvicorn from the project root, fully restart it (not `--reload`), then click **Refresh** in the UI.
+</details>
 
-Confirm .env is in the project root beside pyproject.toml.
+<details>
+<summary><strong>Ollama models don't appear</strong></summary>
 
-Replace placeholder keys with real credentials.
-
-Start Uvicorn from the project root.
-
-Completely restart Uvicorn.
-
-Click Refresh in the UI.
-
-Ollama models do not appear
-
-Confirm the local service and native model catalogue:
-
+```bash
 ollama list
 curl http://127.0.0.1:11434/api/tags
-
-Then inspect the council catalogue:
-
 curl -s http://127.0.0.1:8001/api/models | python -m json.tool
+```
 
-If Ollama works but the second request does not, check OLLAMA_BASE_URL, restartthe backend and inspect its terminal output.
+If Ollama works but the last command doesn't reflect it, check `OLLAMA_BASE_URL`, restart the backend, and check its terminal output.
+</details>
 
-New Conversation does nothing
+<details>
+<summary><strong>"New Conversation" does nothing</strong></summary>
 
-Test the backend directly:
+```bash
+curl -i -X POST http://127.0.0.1:8001/api/conversations \
+  -H "Content-Type: application/json" -d '{}'
+```
 
-curl -i -X POST \
-  http://127.0.0.1:8001/api/conversations \
-  -H "Content-Type: application/json" \
-  -d '{}'
+If this can't connect, start the backend on port 8001. If it succeeds but the button still doesn't work: confirm `frontend/src/api.js` (or `VITE_API_BASE_URL`) points at `http://localhost:8001`, then check the browser console (`Cmd+Option+I`) and the Network tab for the failing request.
+</details>
 
-If this fails to connect, start the backend on port 8001. If it succeeds but thebutton fails:
+<details>
+<summary><strong>ModuleNotFoundError: No module named 'backend.providers'</strong></summary>
 
-Confirm frontend/src/api.js uses http://localhost:8001.
-
-Open browser developer tools with Cmd+Option+I.
-
-Inspect the first red error in Console.
-
-Inspect /api/conversations in Network.
-
-ModuleNotFoundError: No module named 'backend.providers'
-
-Confirm this file exists:
-
-backend/providers.py
-
-Verify the import from the project root:
-
+```bash
 python -c "import backend.providers; print(backend.providers.__file__)"
+```
 
-backend/council.py must contain:
+Confirm `backend/providers.py` exists and that `backend/council.py` imports from it (`from .providers import query_models_parallel, query_model`).
+</details>
 
-from .providers import query_models_parallel, query_model
+<details>
+<summary><strong>"Multiple top-level packages discovered" during install</strong></summary>
 
-Multiple top-level packages discovered
-
-Confirm pyproject.toml contains:
-
+Confirm `pyproject.toml` has:
+```toml
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["backend*"]
 exclude = ["frontend*"]
+```
+then rerun `python -m pip install -e .`
+</details>
 
-Then rerun:
+<details>
+<summary><strong>Relative-import error</strong></summary>
 
-python -m pip install -e .
-
-Relative-import error
-
-Do not run:
-
-python backend/main.py
-
-Run it as a module or through Uvicorn:
-
+Don't run `python backend/main.py` directly. Run it as a module instead:
+```bash
 python -m backend.main
-
+# or
 python -m uvicorn backend.main:app --reload --port 8001
+```
+</details>
 
-Provider returns 401 or 403
+<details>
+<summary><strong>Provider returns 401 / 403</strong></summary>
 
-Check the key in .env without printing the complete value.
+Check the key in `.env` (without printing the full value), confirm the account can access the configured model, confirm the model identifier is correct for that provider, restart the backend after any `.env` change, and check the provider account's billing/credit status.
+</details>
 
-Confirm the account can access the configured model.
+<details>
+<summary><strong>Provider returns 429</strong></summary>
 
-Confirm the correct provider model identifier is configured.
+That's a rate limit or exhausted quota — check the provider's error and dashboard. Selecting fewer council members reduces call volume but doesn't restore exhausted credit.
+</details>
 
-Restart the backend after changing .env.
+<details>
+<summary><strong>A large local council is slow</strong></summary>
 
-Check the provider account's billing or credit status.
+Every selected Ollama model is called during both the Answer and Review stages, and large models may need to load/unload between calls. Start with two local models and keep `OLLAMA_MAX_CONCURRENCY=1`; raise it only after checking memory headroom and stability.
+</details>
 
-Provider returns 429
+## Development checks
 
-HTTP 429 commonly represents a provider rate limit or exhausted quota. Inspectthe provider's returned error and account dashboard. Selecting fewer councilmembers reduces the number of calls but does not restore exhausted credit.
-
-A large local council is slow
-
-Each selected Ollama model is called during both Answer and Review stages. Largemodels may also need to be loaded and unloaded. Start with two local models and:
-
-OLLAMA_MAX_CONCURRENCY=1
-
-Increase concurrency only after checking memory use and stability.
-
-README is read-only in PyCharm
-
-A README opened from a ChatGPT download or temporary preview is not automaticallythe same file as the README in the local PyCharm project. Download or copy theupdated file into the root of the cloned repository as:
-
-LLM_council/README.md
-
-In PyCharm, open README.md from the Project panel, not from a browser previewor temporary download location.
-
-If PyCharm still reports that the local file is read-only, inspect its macOSpermissions and flags from the repository root:
-
-ls -lO README.md
-
-If the owner does not have write permission:
-
-chmod u+w README.md
-
-If ls -lO shows the immutable uchg flag:
-
-chflags nouchg README.md
-
-If the repository is stored in a cloud-synchronised folder, also confirm that thefile is available offline and not locked by the synchronisation client. PyCharmmay offer File → Make File Writable, but operating-system or synchronisationrestrictions must still be corrected at the file level.
-
-Do not use sudo for a normal project file. If the file is owned by anotheraccount, investigate why before changing its ownership.
-
-Development checks
-
-Check backend syntax:
-
+```bash
+# Syntax
 python -m compileall backend
 
-Check backend imports:
-
+# Imports
 python -c "import backend.main, backend.council, backend.providers; print('Backend imports OK')"
 
-Show configured model identifiers without secrets:
-
+# Configured models (no secrets printed)
 python -c "from backend.config import COUNCIL_MODELS, CHAIRMAN_MODEL; print('Council:', COUNCIL_MODELS); print('Chairman:', CHAIRMAN_MODEL)"
 
-Start the frontend development server:
+# Frontend dev server
+cd frontend && npm run dev
 
-cd frontend
-npm run dev
+# Frontend build + lint
+cd frontend && npm run build && npm run lint
+```
 
-Known limitations
+## Known limitations
 
-The application is intended for local development and personal use.
+- Intended for local development and personal use — **no authentication or multi-user authorization**.
+- Local conversation JSON files are **not encrypted**.
+- A provider or model can fail while the rest of the council continues (graceful degradation).
+- Council consensus is not proof of correctness — several models can repeat the same wrong assumption.
+- Architecture and code-review findings still need human validation.
+- **Do not expose the backend publicly** without adding authentication, TLS, network controls, stricter CORS, request limits, and proper secret management.
 
-It does not provide user authentication or multi-user authorisation.
+## Stopping the application
 
-Local conversation JSON files are not encrypted by the application.
+`Ctrl+C` in both the frontend and backend terminals. Quit the Ollama app separately if it shouldn't keep running locally.
 
-A provider or model can fail while the remaining council continues.
+## Attribution
 
-A model consensus is not proof that an answer is correct.
+Based on [Andrej Karpathy's original LLM Council project](https://github.com/karpathy/llm-council). The direct cloud provider adapters, Ollama integration, dynamic model selector, conversation memory, model recommendations, and live council flow are local modifications. Review the upstream project's current license before redistributing a modified version — this README does not replace it.
 
-Several models can repeat the same unsupported assumption.
-
-Architecture and code-review findings still require human validation.
-
-The backend should not be exposed publicly without authentication, TLS,network controls, stricter CORS, request limits and secret management.
-
-Stopping the application
-
-Press Ctrl+C in the frontend terminal and the backend terminal. Quit the Ollamaapplication separately if it should no longer run locally.
-
-Attribution
-
-This project is based on Andrej Karpathy's LLM Council project. The direct cloudprovider adapters, Ollama integration, dynamic model selector and live councilflow are local modifications.
-
-Review the upstream project's current licence before redistributing a modifiedversion. This README does not replace the upstream licence.
-
-Reference documentation
-
-Original LLM Council repository
-
-Ollama API documentation
-
-Ollama model-list endpoint
-
-Ollama OpenAI compatibility
-
-OpenAI API documentation
-
-Anthropic API documentation
-
-Google Gemini API documentation
-
-xAI API documentation
-
-FastAPI documentation
-
-Setuptools package discovery
+**Reference docs:** [Ollama API](https://github.com/ollama/ollama/blob/main/docs/api.md) · [OpenAI API](https://platform.openai.com/docs) · [Anthropic API](https://docs.anthropic.com) · [Google Gemini API](https://ai.google.dev/gemini-api/docs) · [xAI API](https://docs.x.ai) · [FastAPI](https://fastapi.tiangolo.com) · [Setuptools package discovery](https://setuptools.pypa.io/en/latest/userguide/package_discovery.html)

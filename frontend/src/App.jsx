@@ -198,6 +198,27 @@ function App() {
     }
   };
 
+  const handleApplyRecommendation = (modelIds) => {
+    if (isLoading) return;
+
+    const selectableIds = new Set(
+      availableModels.filter((model) => model.selectable).map((model) => model.id)
+    );
+    const applicable = modelIds.filter((id) => selectableIds.has(id));
+    if (applicable.length === 0) return;
+
+    let nextChairman = chairmanModel;
+    if (!applicable.includes(nextChairman)) {
+      nextChairman = applicable[0];
+      setChairmanModel(nextChairman);
+      localStorage.setItem(CHAIRMAN_MODEL_KEY, nextChairman);
+    }
+
+    setSelectedModels(applicable);
+    localStorage.setItem(SELECTED_MODELS_KEY, JSON.stringify(applicable));
+    setCouncilProgress(createProgress(applicable, nextChairman));
+  };
+
   const handleToggleModel = (modelId) => {
     if (isLoading) return;
 
@@ -567,6 +588,7 @@ function App() {
           onRetry={handleRetry}
           canRetry={Boolean(lastFailedContent)}
           isLoading={isLoading}
+          onApplyRecommendation={handleApplyRecommendation}
         />
       </main>
     </div>

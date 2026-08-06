@@ -19,6 +19,7 @@ from .config import (
 from .council import (
     calculate_aggregate_rankings,
     generate_conversation_title,
+    get_model_recommendations,
     run_full_council,
     stage1_collect_responses,
     stage2_collect_rankings,
@@ -61,6 +62,12 @@ class RenameConversationRequest(BaseModel):
     title: str
 
 
+class RecommendModelsRequest(BaseModel):
+    """Request to recommend council models for a not-yet-sent question."""
+
+    content: str
+
+
 class ConversationMetadata(BaseModel):
     """Conversation metadata for list view."""
 
@@ -77,6 +84,32 @@ class Conversation(BaseModel):
     created_at: str
     title: str
     messages: List[Dict[str, Any]]
+
+
+def _history_from_conversation(
+    conversation: Dict[str, Any],
+) -> List[Dict[str, str]]:
+    """Build prior-turn chat history for conversation memory.
+
+    Each earlier turn's "assistant" contribution is the chairman's final
+    synthesis (Stage 3) - the one answer the user actually saw - not the
+    individual council responses or peer rankings, which stay internal to
+    that turn's deliberation.
+    """
+    history: List[Dict[str, str]] = []
+
+    for message in conversation.get("messages", []):
+        if message.get("role") == "user":
+            history.append({
+                "role": "user",
+                "content": message.get("content", ""),
+            })
+        elif message.get("role") == "assistant":
+            response = (message.get("stage3") or {}).get("response")
+            if response:
+                history.append({"role": "assistant", "content": response})
+
+    return history
 
 
 def _unique_models(models: List[str]) -> List[str]:
@@ -246,6 +279,20 @@ async def get_models():
     }
 
 
+@app.post("/api/recommend-models")
+async def recommend_models(request: RecommendModelsRequest):
+    """Suggest council models based on how they've actually performed on
+    similar past questions in this deployment's own conversation history.
+    Returns an empty recommendation (never a guess) if there isn't enough
+    history yet for this question's category.
+    """
+
+    if not request.content.strip():
+        raise HTTPException(status_code=400, detail="content is required")
+
+    return await get_model_recommendations(request.content)
+
+
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
 async def list_conversations():
     """List all conversations (metadata only)."""
@@ -313,6 +360,7 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
 
     models, chairman_model = await _resolve_request_models(request)
     is_first_message = len(conversation["messages"]) == 0
+    history = _history_from_conversation(conversation)
     await storage.add_user_message(conversation_id, request.content)
 
     if is_first_message:
@@ -324,6 +372,7 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
             request.content,
             models,
             chairman_model,
+            history,
         )
     )
 
@@ -332,6 +381,7 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         stage1_results,
         stage2_results,
         stage3_result,
+        metadata,
     )
 
     return {
@@ -355,6 +405,7 @@ async def send_message_stream(
 
     models, chairman_model = await _resolve_request_models(request)
     is_first_message = len(conversation["messages"]) == 0
+    history = _history_from_conversation(conversation)
 
     async def event_generator():
         title_task = None
@@ -372,6 +423,7 @@ async def send_message_stream(
             stage1_results = await stage1_collect_responses(
                 request.content,
                 models,
+                history,
             )
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
@@ -380,12 +432,17 @@ async def send_message_stream(
                 request.content,
                 stage1_results,
                 models,
+                history,
             )
             aggregate_rankings = calculate_aggregate_rankings(
                 stage2_results,
                 label_to_model,
             )
-            yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
+            turn_metadata = {
+                'label_to_model': label_to_model,
+                'aggregate_rankings': aggregate_rankings,
+            }
+            yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': turn_metadata})}\n\n"
 
             yield f"data: {json.dumps({'type': 'stage3_start', 'data': {'chairman_model': chairman_model}})}\n\n"
             stage3_result = await stage3_synthesize_final(
@@ -393,6 +450,7 @@ async def send_message_stream(
                 stage1_results,
                 stage2_results,
                 chairman_model,
+                history,
             )
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
@@ -406,6 +464,7 @@ async def send_message_stream(
                 stage1_results,
                 stage2_results,
                 stage3_result,
+                turn_metadata,
             )
 
             yield f"data: {json.dumps({'type': 'complete', 'data': {'models': models, 'chairman_model': chairman_model}})}\n\n"

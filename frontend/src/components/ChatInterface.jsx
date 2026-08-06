@@ -1,13 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
+import { api } from '../api';
 import Markdown from './Markdown';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
 import { downloadConversationMarkdown } from '../utils/exportConversation';
+import { shortModelName } from '../utils/modelDisplay';
 import './ChatInterface.css';
 
 const TEXTAREA_MIN_HEIGHT = 52;
 const TEXTAREA_MAX_HEIGHT = 300;
+
+// Below this many characters a question is too short to classify usefully -
+// skip the recommendation call entirely rather than fire on every keystroke.
+const RECOMMENDATION_MIN_LENGTH = 12;
+const RECOMMENDATION_DEBOUNCE_MS = 600;
 
 export default function ChatInterface({
   conversation,
@@ -16,8 +23,10 @@ export default function ChatInterface({
   onRetry,
   canRetry,
   isLoading,
+  onApplyRecommendation,
 }) {
   const [input, setInput] = useState('');
+  const [recommendation, setRecommendation] = useState(null);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -42,11 +51,42 @@ export default function ChatInterface({
     textarea.style.height = `${nextHeight}px`;
   }, [input]);
 
+  // As the question is typed, suggest council models based on how they've
+  // actually performed on similar past questions (debounced; skipped for
+  // short/empty input). Never fabricates a suggestion - only shows one
+  // when the backend found real history to back it.
+  useEffect(() => {
+    const trimmed = input.trim();
+    if (trimmed.length < RECOMMENDATION_MIN_LENGTH || isLoading) {
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const result = await api.recommendModels(trimmed, controller.signal);
+        setRecommendation(
+          result.recommended && result.recommended.length > 0 ? result : null
+        );
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          console.error('Failed to get model recommendations:', error);
+        }
+      }
+    }, RECOMMENDATION_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [input, isLoading]);
+
   const handleSubmit = (e) => {
     e.preventDefault();
     if (input.trim() && !isLoading) {
       onSendMessage(input);
       setInput('');
+      setRecommendation(null);
     }
   };
 
@@ -168,6 +208,40 @@ export default function ChatInterface({
 
         <div ref={messagesEndRef} />
       </div>
+
+      {recommendation
+        && input.trim().length >= RECOMMENDATION_MIN_LENGTH
+        && !isLoading && (
+        <div className="suggestion-banner">
+          <span>
+            💡 Based on {recommendation.based_on_conversations}{' '}
+            similar past {recommendation.based_on_conversations === 1 ? 'conversation' : 'conversations'},{' '}
+            <strong>{recommendation.recommended.map(shortModelName).join(', ')}</strong>
+            {' '}{recommendation.recommended.length === 1 ? 'has' : 'have'} ranked best
+            for {recommendation.category} questions in your council.
+          </span>
+          <div className="suggestion-actions">
+            <button
+              type="button"
+              className="suggestion-apply-btn"
+              onClick={() => {
+                onApplyRecommendation(recommendation.recommended);
+                setRecommendation(null);
+              }}
+            >
+              Use these models
+            </button>
+            <button
+              type="button"
+              className="suggestion-dismiss-btn"
+              onClick={() => setRecommendation(null)}
+              aria-label="Dismiss suggestion"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
 
       <form className="input-form" onSubmit={handleSubmit}>
         <textarea

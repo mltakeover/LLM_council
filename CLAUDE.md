@@ -23,27 +23,35 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 - Graceful degradation: returns None on failure, continues with successful responses
 
 **`council.py`** - The Core Logic
-- `stage1_collect_responses()`: Parallel queries to all council models
+- `stage1_collect_responses()`: Parallel queries to all council models. Accepts an optional `history` list (prior-turn messages) so follow-up questions carry real conversation context.
 - `stage2_collect_rankings()`:
   - Anonymizes responses as "Response A, B, C, etc."
   - Creates `label_to_model` mapping for de-anonymization
   - Prompts models to evaluate and rank (with strict format requirements)
   - Returns tuple: (rankings_list, label_to_model_dict)
   - Each ranking includes both raw text and `parsed_ranking` list
-- `stage3_synthesize_final()`: Chairman synthesizes from all responses + rankings
+  - Also accepts `history`
+- `stage3_synthesize_final()`: Chairman synthesizes from all responses + rankings. Also accepts `history`.
 - `parse_ranking_from_text()`: Extracts "FINAL RANKING:" section, handles both numbered lists and plain format
 - `calculate_aggregate_rankings()`: Computes average rank position across all peer evaluations
+- `classify_question(text)`: Lightweight **keyword-based** topic guess (`"code"` / `"creative"` / `"analysis"` / `"general"`). Deliberately not a claim about which model is good at what - there's no verified benchmark data backing that, and it would go stale. It only buckets a question so recommendations compare like with like.
+- `get_model_recommendations(question, ...)`: Self-learning model suggestions. Scans every stored conversation (`storage.get_all_conversations()`), finds ones whose first message classifies into the same category, averages each model's persisted `aggregate_rankings.average_rank` across those, and returns the best performers. Returns an **empty** recommendation (never a guess) when there isn't at least `minimum_conversations` of matching history - this is the actual "smart model selection" feature, driven entirely by this deployment's own peer-review outcomes.
+
+**Conversation memory**: `main.py` builds a `history` list from the current conversation's prior turns (via `_history_from_conversation()`) before calling into `council.py`. Each earlier turn's "assistant" contribution is the **chairman's Stage 3 answer** - the one reply the user actually saw - not the individual council responses or rankings, which stay internal to that turn. Without this, every message would be answered as if asked cold, with zero memory of the conversation so far.
 
 **`storage.py`**
 - JSON-based conversation storage in `data/conversations/`
 - Each conversation: `{id, created_at, messages[]}`
-- Assistant messages contain: `{role, stage1, stage2, stage3}`
-- Note: metadata (label_to_model, aggregate_rankings) is NOT persisted to storage, only returned via API
+- Assistant messages contain: `{role, stage1, stage2, stage3, metadata}` - `metadata` (`label_to_model`, `aggregate_rankings`) **is persisted** (added because (a) reloading an old conversation was silently losing its de-anonymized names and aggregate rankings, and (b) `get_model_recommendations` needs it to learn from past turns)
+- All I/O is async (`asyncio.to_thread`); writes to one conversation are serialized with a per-conversation `asyncio.Lock`; `list_conversations()` reads from an in-memory metadata cache instead of re-parsing every file
+- `get_all_conversations()`: loads every conversation in full - used only by `get_model_recommendations`, not the hot path
 
 **`main.py`**
 - FastAPI app with CORS enabled for localhost:5173 and localhost:3000
 - POST `/api/conversations/{id}/message` returns metadata in addition to stages
 - Metadata includes: label_to_model mapping and aggregate_rankings
+- POST `/api/recommend-models` `{content}` → `{category, recommended, scores, based_on_conversations}` - see `get_model_recommendations` above
+- DELETE / PATCH `/api/conversations/{id}` - delete and rename
 
 ### Frontend Structure (`frontend/src/`)
 
@@ -130,7 +138,8 @@ Models are hardcoded in `backend/config.py`. Chairman can be same or different f
 1. **Module Import Errors**: Always run backend as `python -m backend.main` from project root, not from backend directory
 2. **CORS Issues**: Frontend must match allowed origins in `main.py` CORS middleware
 3. **Ranking Parse Failures**: If models don't follow format, fallback regex extracts any "Response X" patterns in order
-4. **Missing Metadata**: Metadata is ephemeral (not persisted), only available in API responses
+4. **Cold-start recommendations**: `get_model_recommendations()` returns an empty `recommended` list until there's real matching history for that question's category - this is intentional, not a bug, so double-check `based_on_conversations` before assuming something's broken
+5. **History growth**: `history` passed into the council stages grows with every turn (each turn adds a user message + the chairman's answer). No trimming/summarization yet - fine for normal conversations, but very long-running ones will grow the prompt sent to every model each turn
 
 ## Future Enhancement Ideas
 

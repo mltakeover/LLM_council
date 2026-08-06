@@ -4,6 +4,7 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import storage
 from .config import (
     CHAIRMAN_MODEL,
     COUNCIL_MODELS,
@@ -19,14 +20,31 @@ def _active_models(models: Optional[List[str]]) -> List[str]:
     return list(models) if models else list(COUNCIL_MODELS)
 
 
+def _history_messages(
+    history: Optional[List[Dict[str, str]]],
+) -> List[Dict[str, str]]:
+    """Copy prior-turn messages so callers can safely append to the result."""
+
+    return list(history) if history else []
+
+
 async def stage1_collect_responses(
     user_query: str,
     models: Optional[List[str]] = None,
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> List[Dict[str, Any]]:
-    """Collect independent responses from the selected council models."""
+    """Collect independent responses from the selected council models.
+
+    `history` carries prior turns of this conversation (each earlier turn's
+    "assistant" message is the chairman's synthesized answer - the one
+    reply the user actually saw), so follow-up questions get answered with
+    real context instead of starting the council over from nothing.
+    """
 
     council_models = _active_models(models)
-    messages = [{"role": "user", "content": user_query}]
+    messages = _history_messages(history) + [
+        {"role": "user", "content": user_query}
+    ]
     responses = await query_models_parallel(council_models, messages)
 
     stage1_results = []
@@ -45,6 +63,7 @@ async def stage2_collect_rankings(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
     models: Optional[List[str]] = None,
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """Ask the selected models to rank anonymized Stage 1 responses."""
 
@@ -92,7 +111,9 @@ FINAL RANKING:
 
 Now provide your evaluation and ranking:"""
 
-    messages = [{"role": "user", "content": ranking_prompt}]
+    messages = _history_messages(history) + [
+        {"role": "user", "content": ranking_prompt}
+    ]
     responses = await query_models_parallel(council_models, messages)
 
     stage2_results = []
@@ -114,6 +135,7 @@ async def stage3_synthesize_final(
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
     chairman_model: Optional[str] = None,
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """Ask the selected chairman to synthesize the council output."""
 
@@ -145,7 +167,9 @@ Your task as Chairman is to synthesize all of this information into a single, co
 
 Provide a clear, well-reasoned final answer that represents the council's collective wisdom:"""
 
-    messages = [{"role": "user", "content": chairman_prompt}]
+    messages = _history_messages(history) + [
+        {"role": "user", "content": chairman_prompt}
+    ]
     response = await query_model(active_chairman, messages)
 
     if response is None:
@@ -246,6 +270,7 @@ async def run_full_council(
     user_query: str,
     models: Optional[List[str]] = None,
     chairman_model: Optional[str] = None,
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> Tuple[List, List, Dict, Dict]:
     """Run all council stages using request-selected or default models."""
 
@@ -255,6 +280,7 @@ async def run_full_council(
     stage1_results = await stage1_collect_responses(
         user_query,
         council_models,
+        history,
     )
 
     if not stage1_results:
@@ -270,6 +296,7 @@ async def run_full_council(
         user_query,
         stage1_results,
         council_models,
+        history,
     )
 
     aggregate_rankings = calculate_aggregate_rankings(
@@ -282,6 +309,7 @@ async def run_full_council(
         stage1_results,
         stage2_results,
         active_chairman,
+        history,
     )
 
     metadata = {
@@ -292,4 +320,133 @@ async def run_full_council(
     }
 
     return stage1_results, stage2_results, stage3_result, metadata
+
+
+# Deliberately just keyword matching, not a claim about which model is
+# "best" at a topic - this app has no verified, up-to-date benchmark data
+# to back a claim like that, and hardcoding one would go stale anyway.
+# It only buckets a question into a rough category so
+# get_model_recommendations can compare "similar past questions" -
+# the actual recommendation signal comes from this deployment's own
+# stored peer-review outcomes, not from this list.
+_CODE_KEYWORDS = (
+    "code", "function", "bug", "debug", "error", "exception", "python",
+    "javascript", "typescript", " java", "rust", "sql", "regex", " api",
+    "compile", "syntax", "algorithm", "refactor", "```", "stack trace",
+    "unit test", "variable", "for loop", "array", "json", "endpoint",
+)
+
+_CREATIVE_KEYWORDS = (
+    "poem", "poetry", "short story", "write a story", "creative writing",
+    "fiction", "lyrics", "novel", "screenplay", "haiku", "song about",
+    "metaphor", "narrative",
+)
+
+_ANALYSIS_KEYWORDS = (
+    "prove", "calculate", "solve for", "analyze", "analyse", "compare",
+    "equation", "statistics", "derivative", "integral", "hypothesis",
+    "dataset", "correlation", "theorem", "probability",
+)
+
+
+def classify_question(text: str) -> str:
+    """Rough, deterministic topic guess for a user question.
+
+    Returns one of "code", "creative", "analysis", or "general".
+    """
+    lowered = (text or "").lower()
+
+    if any(keyword in lowered for keyword in _CODE_KEYWORDS):
+        return "code"
+    if any(keyword in lowered for keyword in _CREATIVE_KEYWORDS):
+        return "creative"
+    if any(keyword in lowered for keyword in _ANALYSIS_KEYWORDS):
+        return "analysis"
+    return "general"
+
+
+async def get_model_recommendations(
+    question: str,
+    exclude_conversation_id: Optional[str] = None,
+    minimum_conversations: int = 1,
+    top_n: int = 3,
+) -> Dict[str, Any]:
+    """Recommend council models using this deployment's own peer-review
+    history, not a hardcoded opinion about model quality.
+
+    Looks at every stored conversation whose first user message falls in
+    the same rough category as `question` (see classify_question), reads
+    each one's persisted Stage 2 aggregate_rankings, and averages every
+    model's rank across all of them. Models that have genuinely ranked
+    well on similar past questions in *this* council come back first.
+    Returns an empty recommendation (never a guess) when there isn't
+    enough history yet.
+    """
+    category = classify_question(question)
+    conversations = await storage.get_all_conversations()
+
+    model_ranks: Dict[str, List[float]] = defaultdict(list)
+    matched_conversations = 0
+
+    for conversation in conversations:
+        if conversation.get("id") == exclude_conversation_id:
+            continue
+
+        messages = conversation.get("messages") or []
+        first_user_message = next(
+            (m for m in messages if m.get("role") == "user"),
+            None,
+        )
+        if not first_user_message:
+            continue
+
+        if classify_question(first_user_message.get("content", "")) != category:
+            continue
+
+        conversation_matched = False
+        for message in messages:
+            if message.get("role") != "assistant":
+                continue
+
+            aggregate_rankings = (
+                (message.get("metadata") or {}).get("aggregate_rankings")
+                or []
+            )
+
+            for entry in aggregate_rankings:
+                model = entry.get("model")
+                average_rank = entry.get("average_rank")
+                if model and average_rank is not None:
+                    model_ranks[model].append(average_rank)
+                    conversation_matched = True
+
+        if conversation_matched:
+            matched_conversations += 1
+
+    if matched_conversations < minimum_conversations or not model_ranks:
+        return {
+            "category": category,
+            "recommended": [],
+            "scores": [],
+            "based_on_conversations": matched_conversations,
+        }
+
+    ranked_models = sorted(
+        (
+            {
+                "model": model,
+                "average_rank": round(sum(ranks) / len(ranks), 2),
+                "sample_size": len(ranks),
+            }
+            for model, ranks in model_ranks.items()
+        ),
+        key=lambda item: item["average_rank"],
+    )
+
+    return {
+        "category": category,
+        "recommended": [item["model"] for item in ranked_models[:top_n]],
+        "scores": ranked_models[:top_n],
+        "based_on_conversations": matched_conversations,
+    }
 

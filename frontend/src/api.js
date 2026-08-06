@@ -70,6 +70,25 @@ export const api = {
     return response.json();
   },
 
+  /**
+   * Suggest council models for a not-yet-sent question, based on how
+   * models have actually performed on similar past questions. Pass
+   * `signal` to cancel a stale in-flight request (e.g. the user kept
+   * typing).
+   */
+  async recommendModels(content, signal) {
+    const response = await fetch(`${API_BASE}/api/recommend-models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+      signal,
+    });
+    if (!response.ok) {
+      throw await responseError(response, 'Failed to get model recommendations');
+    }
+    return response.json();
+  },
+
   /** Discover configured cloud models and currently installed Ollama models. */
   async getModels() {
     const response = await fetch(`${API_BASE}/api/models`, {

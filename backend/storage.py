@@ -221,6 +221,35 @@ async def list_conversations() -> List[Dict[str, Any]]:
     return conversations
 
 
+def _read_all_conversations_sync() -> List[Dict[str, Any]]:
+    ensure_data_dir()
+    conversations = []
+
+    for filename in os.listdir(DATA_DIR):
+        if not filename.endswith(".json"):
+            continue
+
+        path = os.path.join(DATA_DIR, filename)
+        try:
+            with open(path, "r") as f:
+                conversations.append(json.load(f))
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    return conversations
+
+
+async def get_all_conversations() -> List[Dict[str, Any]]:
+    """Load every conversation in full (not just metadata).
+
+    Used for model recommendations, which need to look back over past
+    turns' persisted aggregate_rankings. Personal/local-scale only - this
+    re-reads every file rather than maintaining a second cache, which is
+    fine at the conversation counts this app is meant for.
+    """
+    return await asyncio.to_thread(_read_all_conversations_sync)
+
+
 async def add_user_message(conversation_id: str, content: str):
     """
     Add a user message to a conversation.
@@ -247,6 +276,7 @@ async def add_assistant_message(
     stage1: List[Dict[str, Any]],
     stage2: List[Dict[str, Any]],
     stage3: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None,
 ):
     """
     Add an assistant message with all 3 stages to a conversation.
@@ -256,6 +286,10 @@ async def add_assistant_message(
         stage1: List of individual model responses
         stage2: List of model rankings
         stage3: Final synthesized response
+        metadata: label_to_model / aggregate_rankings for this turn. Persisted
+            so a reloaded conversation still shows de-anonymized model names
+            and aggregate rankings, and so future turns can learn from past
+            peer-review outcomes (see council.get_model_recommendations).
     """
     async with _locks[conversation_id]:
         conversation = await get_conversation(conversation_id)
@@ -267,6 +301,7 @@ async def add_assistant_message(
             "stage1": stage1,
             "stage2": stage2,
             "stage3": stage3,
+            "metadata": metadata,
         })
 
         await save_conversation(conversation)
