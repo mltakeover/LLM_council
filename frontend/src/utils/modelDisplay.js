@@ -16,3 +16,9 @@ export function providerName(modelId) {
   const provider = modelId.split(':', 1)[0];
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
+
+/** Lowercase provider key, e.g. "openai" — used to pick a provider color. */
+export function providerSlug(modelId) {
+  if (!modelId) return '';
+  return modelId.split(':', 1)[0].toLowerCase();
+}

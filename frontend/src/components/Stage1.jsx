@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import Markdown from './Markdown';
-import { shortModelName } from '../utils/modelDisplay';
+import { providerSlug, shortModelName } from '../utils/modelDisplay';
 import './Stage1.css';
 
 function formatDuration(seconds) {
@@ -51,6 +51,10 @@ export default function Stage1({ responses }) {
             className={`tab ${activeTab === index ? 'active' : ''}`}
             onClick={() => setActiveTab(index)}
           >
+            <span
+              className={`tab-provider-dot tab-provider-dot--${providerSlug(resp.model)}`}
+              aria-hidden="true"
+            />
             {shortModelName(resp.model)}
           </button>
         ))}

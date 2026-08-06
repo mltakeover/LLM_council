@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import Markdown from './Markdown';
-import { shortModelName } from '../utils/modelDisplay';
+import { providerSlug, shortModelName } from '../utils/modelDisplay';
 import './Stage2.css';
+
+const RANK_MEDALS = ['🥇', '🥈', '🥉'];
 
 function deAnonymizeText(text, labelToModel) {
   if (!labelToModel) return text;
@@ -68,6 +70,10 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
             className={`tab ${activeTab === index ? 'active' : ''}`}
             onClick={() => setActiveTab(index)}
           >
+            <span
+              className={`tab-provider-dot tab-provider-dot--${providerSlug(rank.model)}`}
+              aria-hidden="true"
+            />
             {shortModelName(rank.model)}
           </button>
         ))}
@@ -113,8 +119,13 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
           </p>
           <div className="aggregate-list">
             {aggregateRankings.map((agg, index) => (
-              <div key={index} className="aggregate-item">
-                <span className="rank-position">#{index + 1}</span>
+              <div
+                key={index}
+                className={`aggregate-item ${index < 3 ? 'aggregate-item--top' : ''}`}
+              >
+                <span className="rank-position">
+                  {RANK_MEDALS[index] || `#${index + 1}`}
+                </span>
                 <span className="rank-model">
                   {shortModelName(agg.model)}
                 </span>
