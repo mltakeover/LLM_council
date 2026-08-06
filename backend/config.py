@@ -52,6 +52,10 @@ OLLAMA_BASE_URL = os.getenv(
     "http://127.0.0.1:11434/v1/",
 ).strip()
 
+OLLAMA_DISCOVERY_TIMEOUT = float(
+    os.getenv("OLLAMA_DISCOVERY_TIMEOUT", "5")
+)
+
 OLLAMA_MAX_CONCURRENCY = int(
     os.getenv("OLLAMA_MAX_CONCURRENCY", "1")
 )
@@ -82,8 +86,8 @@ MODEL_NAMES = {
 }
 
 
-# OLLAMA_MODELS supports multiple local council members. OLLAMA_MODEL remains
-# supported as a backwards-compatible single-model setting.
+# OLLAMA_MODELS defines the startup defaults. The UI discovers every installed
+# local model dynamically, so pulling a new model does not require code changes.
 _ollama_models_value = os.getenv("OLLAMA_MODELS")
 
 if _ollama_models_value is None:
@@ -104,6 +108,14 @@ SUPPORTED_PROVIDERS = (
 )
 
 PROVIDERS_REQUIRING_KEYS = frozenset(API_KEYS.keys())
+
+# These cloud models appear in the UI when their provider key is configured,
+# even when the model is not part of the default council.
+AVAILABLE_CLOUD_MODELS = [
+    f"{provider}:{MODEL_NAMES[provider]}"
+    for provider in ("openai", "anthropic", "google", "xai")
+    if _is_configured_api_key(API_KEYS.get(provider))
+]
 
 
 # The safe default is local-only. Set COUNCIL_PROVIDERS explicitly in .env

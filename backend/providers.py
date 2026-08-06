@@ -2,16 +2,19 @@
 
 import asyncio
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 from anthropic import AsyncAnthropic
 from google import genai
 from google.genai import types
+import httpx
 from openai import AsyncOpenAI
 
 from .config import (
     ANTHROPIC_MAX_TOKENS,
     API_KEYS,
     OLLAMA_BASE_URL,
+    OLLAMA_DISCOVERY_TIMEOUT,
     OLLAMA_MAX_CONCURRENCY,
     REQUEST_TIMEOUT,
 )
@@ -39,7 +42,6 @@ _google_client = (
     else None
 )
 
-# xAI exposes an OpenAI-compatible API.
 _xai_client = (
     AsyncOpenAI(
         api_key=API_KEYS["xai"],
@@ -49,16 +51,11 @@ _xai_client = (
     else None
 )
 
-# Ollama exposes an OpenAI-compatible local API. The OpenAI SDK requires an
-# api_key value, but Ollama ignores this placeholder for localhost requests.
 _ollama_client = AsyncOpenAI(
     api_key="ollama",
     base_url=OLLAMA_BASE_URL.rstrip("/") + "/",
 )
 
-# Multiple Ollama tasks may be scheduled together by the council and title
-# generator. Serial execution avoids unnecessary model swapping and memory
-# pressure. Increase OLLAMA_MAX_CONCURRENCY only after testing your machine.
 _ollama_semaphore = asyncio.Semaphore(OLLAMA_MAX_CONCURRENCY)
 
 
@@ -75,9 +72,56 @@ def _split_model_id(model_id: str) -> Tuple[str, str]:
     return provider.lower().strip(), model_name.strip()
 
 
-def _system_prompt(messages: List[Message]) -> str:
-    """Combine system messages for providers that take a separate instruction."""
+def _ollama_native_url(path: str) -> str:
+    """Build a native Ollama URL from the configured OpenAI-compatible URL."""
 
+    parsed = urlsplit(OLLAMA_BASE_URL)
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError("OLLAMA_BASE_URL must be an absolute HTTP URL.")
+
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+
+async def list_ollama_models() -> List[Dict[str, Any]]:
+    """Discover models currently registered with the local Ollama service."""
+
+    async with httpx.AsyncClient(timeout=OLLAMA_DISCOVERY_TIMEOUT) as client:
+        response = await client.get(_ollama_native_url("/api/tags"))
+        response.raise_for_status()
+
+    payload = response.json()
+    discovered = []
+
+    for item in payload.get("models", []):
+        model_name = item.get("name") or item.get("model")
+        if not model_name:
+            continue
+
+        size = int(item.get("size") or 0)
+        is_cloud = model_name.endswith("-cloud") or size <= 0
+        details = item.get("details") or {}
+
+        discovered.append({
+            "id": f"ollama:{model_name}",
+            "name": model_name,
+            "provider": "ollama",
+            "source": "ollama-cloud" if is_cloud else "local",
+            "is_local": not is_cloud,
+            "is_cloud": is_cloud,
+            "selectable": not is_cloud,
+            "size": size,
+            "parameter_size": details.get("parameter_size"),
+            "quantization": details.get("quantization_level"),
+            "modified_at": item.get("modified_at"),
+        })
+
+    return sorted(
+        discovered,
+        key=lambda model: (model["is_cloud"], model["name"].lower()),
+    )
+
+
+def _system_prompt(messages: List[Message]) -> str:
     return "\n\n".join(
         message.get("content", "")
         for message in messages
@@ -95,14 +139,11 @@ async def _query_openai(
     response = await _openai_client.chat.completions.create(
         model=model_name,
         messages=messages,  # type: ignore[arg-type]
-        # Prevents stored application state. It is not the same as ZDR.
         store=False,
     )
 
-    content = response.choices[0].message.content or ""
-
     return {
-        "content": content,
+        "content": response.choices[0].message.content or "",
         "reasoning_details": None,
     }
 
@@ -115,7 +156,6 @@ async def _query_anthropic(
         raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
 
     system_prompt = _system_prompt(messages)
-
     anthropic_messages = [
         {
             "role": (
@@ -144,7 +184,6 @@ async def _query_anthropic(
         request["system"] = system_prompt
 
     response = await _anthropic_client.messages.create(**request)
-
     content = "".join(
         block.text
         for block in response.content
@@ -167,7 +206,6 @@ async def _query_google(
         )
 
     system_prompt = _system_prompt(messages)
-
     contents = [
         types.Content(
             role=(
@@ -189,9 +227,7 @@ async def _query_google(
         contents = [
             types.Content(
                 role="user",
-                parts=[
-                    types.Part.from_text(text="Please continue.")
-                ],
+                parts=[types.Part.from_text(text="Please continue.")],
             )
         ]
 
@@ -205,9 +241,7 @@ async def _query_google(
             system_instruction=system_prompt
         )
 
-    response = await _google_client.aio.models.generate_content(
-        **request
-    )
+    response = await _google_client.aio.models.generate_content(**request)
 
     return {
         "content": response.text or "",
@@ -227,10 +261,8 @@ async def _query_xai(
         messages=messages,  # type: ignore[arg-type]
     )
 
-    content = response.choices[0].message.content or ""
-
     return {
-        "content": content,
+        "content": response.choices[0].message.content or "",
         "reasoning_details": None,
     }
 
@@ -248,9 +280,6 @@ async def _query_ollama(
         )
 
     message = response.choices[0].message
-    content = message.content or ""
-
-    # Ollama thinking models may return reasoning as an extra response field.
     reasoning_details = getattr(message, "reasoning", None)
 
     if reasoning_details is None:
@@ -261,7 +290,7 @@ async def _query_ollama(
         )
 
     return {
-        "content": content,
+        "content": message.content or "",
         "reasoning_details": reasoning_details,
     }
 
@@ -275,7 +304,6 @@ async def query_model(
 
     try:
         provider, model_name = _split_model_id(model)
-
         handlers = {
             "openai": _query_openai,
             "anthropic": _query_anthropic,
@@ -283,7 +311,6 @@ async def query_model(
             "xai": _query_xai,
             "ollama": _query_ollama,
         }
-
         handler = handlers.get(provider)
 
         if handler is None:
@@ -303,7 +330,6 @@ async def query_model(
     except asyncio.TimeoutError:
         print(f"Timeout querying {model} after {timeout} seconds")
         return None
-
     except Exception as exc:
         print(
             f"Error querying {model}: "
@@ -319,11 +345,7 @@ async def query_models_parallel(
     """Query all council members concurrently."""
 
     responses = await asyncio.gather(
-        *[
-            query_model(model, messages)
-            for model in models
-        ]
+        *[query_model(model, messages) for model in models]
     )
-
     return dict(zip(models, responses))
 

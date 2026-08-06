@@ -1,8 +1,31 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
+import CouncilFlow from './components/CouncilFlow';
 import { api } from './api';
 import './App.css';
+
+
+const SELECTED_MODELS_KEY = 'llm-council:selected-models';
+const CHAIRMAN_MODEL_KEY = 'llm-council:chairman-model';
+
+
+function createProgress(models, chairmanModel, phase = 'ready') {
+  return {
+    phase,
+    models: models.map((id) => ({
+      id,
+      stage1: 'pending',
+      stage2: 'pending',
+    })),
+    chairman: {
+      id: chairmanModel,
+      stage3: 'pending',
+    },
+    error: null,
+  };
+}
+
 
 function App() {
   const [conversations, setConversations] = useState([]);
@@ -10,12 +33,20 @@ function App() {
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Load conversations on mount
+  const [availableModels, setAvailableModels] = useState([]);
+  const [selectedModels, setSelectedModels] = useState([]);
+  const [chairmanModel, setChairmanModel] = useState(null);
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelError, setModelError] = useState(null);
+  const [councilProgress, setCouncilProgress] = useState(
+    createProgress([], null)
+  );
+
   useEffect(() => {
     loadConversations();
+    loadModels();
   }, []);
 
-  // Load conversation details when selected
   useEffect(() => {
     if (currentConversationId) {
       loadConversation(currentConversationId);
@@ -24,17 +55,82 @@ function App() {
 
   const loadConversations = async () => {
     try {
-      const convs = await api.listConversations();
-      setConversations(convs);
+      setConversations(await api.listConversations());
     } catch (error) {
       console.error('Failed to load conversations:', error);
     }
   };
 
+  const loadModels = async () => {
+    setModelsLoading(true);
+    setModelError(null);
+
+    try {
+      const catalog = await api.getModels();
+      const selectableIds = catalog.models
+        .filter((model) => model.selectable)
+        .map((model) => model.id);
+      const selectableSet = new Set(selectableIds);
+
+      let savedModels = [];
+      try {
+        savedModels = JSON.parse(
+          localStorage.getItem(SELECTED_MODELS_KEY) || '[]'
+        );
+      } catch {
+        savedModels = [];
+      }
+
+      const restoredModels = Array.isArray(savedModels)
+        ? savedModels.filter((model) => selectableSet.has(model))
+        : [];
+
+      const nextModels = restoredModels.length > 0
+        ? restoredModels
+        : catalog.default_models.filter((model) => selectableSet.has(model));
+
+      const finalModels = nextModels.length > 0
+        ? nextModels
+        : selectableIds.slice(0, 1);
+
+      const savedChairman = localStorage.getItem(CHAIRMAN_MODEL_KEY);
+      const nextChairman = (
+        savedChairman && finalModels.includes(savedChairman)
+          ? savedChairman
+          : (
+              finalModels.includes(catalog.default_chairman_model)
+                ? catalog.default_chairman_model
+                : finalModels[0] || null
+            )
+      );
+
+      setAvailableModels(catalog.models);
+      setSelectedModels(finalModels);
+      setChairmanModel(nextChairman);
+      setCouncilProgress(createProgress(finalModels, nextChairman));
+
+      localStorage.setItem(
+        SELECTED_MODELS_KEY,
+        JSON.stringify(finalModels)
+      );
+      if (nextChairman) {
+        localStorage.setItem(CHAIRMAN_MODEL_KEY, nextChairman);
+      }
+
+      if (catalog.ollama_error) {
+        setModelError(catalog.ollama_error);
+      }
+    } catch (error) {
+      console.error('Failed to discover models:', error);
+      setModelError(error.message);
+    } finally {
+      setModelsLoading(false);
+    }
+  };
+
   const loadConversation = async (id) => {
     try {
-      const conv = await api.getConversation(id);
-      setCurrentConversation(conv);
+      setCurrentConversation(await api.getConversation(id));
     } catch (error) {
       console.error('Failed to load conversation:', error);
     }
@@ -42,14 +138,23 @@ function App() {
 
   const handleNewConversation = async () => {
     try {
-      const newConv = await api.createConversation();
-      setConversations([
-        { id: newConv.id, created_at: newConv.created_at, message_count: 0 },
-        ...conversations,
+      const newConversation = await api.createConversation();
+      setConversations((previous) => [
+        {
+          id: newConversation.id,
+          created_at: newConversation.created_at,
+          title: newConversation.title,
+          message_count: 0,
+        },
+        ...previous,
       ]);
-      setCurrentConversationId(newConv.id);
+      setCurrentConversationId(newConversation.id);
+      setCouncilProgress(
+        createProgress(selectedModels, chairmanModel)
+      );
     } catch (error) {
       console.error('Failed to create conversation:', error);
+      setModelError(error.message);
     }
   };
 
@@ -57,126 +162,282 @@ function App() {
     setCurrentConversationId(id);
   };
 
+  const handleToggleModel = (modelId) => {
+    if (isLoading) return;
+
+    setSelectedModels((previous) => {
+      const isSelected = previous.includes(modelId);
+      if (isSelected && previous.length === 1) {
+        return previous;
+      }
+
+      const next = isSelected
+        ? previous.filter((model) => model !== modelId)
+        : [...previous, modelId];
+
+      let nextChairman = chairmanModel;
+      if (!next.includes(nextChairman)) {
+        nextChairman = next[0] || null;
+        setChairmanModel(nextChairman);
+        if (nextChairman) {
+          localStorage.setItem(CHAIRMAN_MODEL_KEY, nextChairman);
+        }
+      }
+
+      localStorage.setItem(SELECTED_MODELS_KEY, JSON.stringify(next));
+      setCouncilProgress(createProgress(next, nextChairman));
+      return next;
+    });
+  };
+
+  const handleChairmanChange = (modelId) => {
+    if (isLoading || !selectedModels.includes(modelId)) return;
+
+    setChairmanModel(modelId);
+    localStorage.setItem(CHAIRMAN_MODEL_KEY, modelId);
+    setCouncilProgress(createProgress(selectedModels, modelId));
+  };
+
+  const updateLastAssistant = (updater) => {
+    setCurrentConversation((previous) => {
+      if (!previous || previous.messages.length === 0) return previous;
+
+      const messages = [...previous.messages];
+      const index = messages.length - 1;
+      messages[index] = updater({
+        ...messages[index],
+        loading: { ...messages[index].loading },
+      });
+
+      return { ...previous, messages };
+    });
+  };
+
   const handleSendMessage = async (content) => {
-    if (!currentConversationId) return;
+    if (
+      !currentConversationId
+      || !currentConversation
+      || selectedModels.length === 0
+    ) return;
+
+    const activeModels = [...selectedModels];
+    const activeChairman = chairmanModel || activeModels[0];
 
     setIsLoading(true);
-    try {
-      // Optimistically add user message to UI
-      const userMessage = { role: 'user', content };
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...prev.messages, userMessage],
-      }));
+    setModelError(null);
+    setCouncilProgress(
+      createProgress(activeModels, activeChairman, 'connecting')
+    );
 
-      // Create a partial assistant message that will be updated progressively
-      const assistantMessage = {
-        role: 'assistant',
-        stage1: null,
-        stage2: null,
-        stage3: null,
-        metadata: null,
-        loading: {
-          stage1: false,
-          stage2: false,
-          stage3: false,
-        },
+    const userMessage = { role: 'user', content };
+    const assistantMessage = {
+      role: 'assistant',
+      stage1: null,
+      stage2: null,
+      stage3: null,
+      metadata: null,
+      loading: {
+        stage1: false,
+        stage2: false,
+        stage3: false,
+      },
+    };
+
+    setCurrentConversation((previous) => {
+      if (!previous) return previous;
+
+      return {
+        ...previous,
+        messages: [
+          ...previous.messages,
+          userMessage,
+          assistantMessage,
+        ],
       };
+    });
 
-      // Add the partial assistant message
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...prev.messages, assistantMessage],
-      }));
+    try {
+      const terminalEvent = await api.sendMessageStream(
+        currentConversationId,
+        content,
+        {
+          models: activeModels,
+          chairmanModel: activeChairman,
+        },
+        (eventType, event) => {
+          switch (eventType) {
+            case 'council_start': {
+              const eventModels = event.data?.models || activeModels;
+              const eventChairman = (
+                event.data?.chairman_model || activeChairman
+              );
+              setCouncilProgress(
+                createProgress(eventModels, eventChairman, 'connecting')
+              );
+              break;
+            }
 
-      // Send message with streaming
-      await api.sendMessageStream(currentConversationId, content, (eventType, event) => {
-        switch (eventType) {
-          case 'stage1_start':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage1 = true;
-              return { ...prev, messages };
-            });
-            break;
+            case 'stage1_start':
+              updateLastAssistant((message) => ({
+                ...message,
+                loading: { ...message.loading, stage1: true },
+              }));
+              setCouncilProgress((previous) => ({
+                ...previous,
+                phase: 'stage1',
+                models: previous.models.map((model) => ({
+                  ...model,
+                  stage1: 'active',
+                })),
+              }));
+              break;
 
-          case 'stage1_complete':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.stage1 = event.data;
-              lastMsg.loading.stage1 = false;
-              return { ...prev, messages };
-            });
-            break;
+            case 'stage1_complete': {
+              const successful = new Set(
+                (event.data || []).map((result) => result.model)
+              );
+              updateLastAssistant((message) => ({
+                ...message,
+                stage1: event.data,
+                loading: { ...message.loading, stage1: false },
+              }));
+              setCouncilProgress((previous) => ({
+                ...previous,
+                models: previous.models.map((model) => ({
+                  ...model,
+                  stage1: successful.has(model.id)
+                    ? 'complete'
+                    : 'failed',
+                })),
+              }));
+              break;
+            }
 
-          case 'stage2_start':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage2 = true;
-              return { ...prev, messages };
-            });
-            break;
+            case 'stage2_start':
+              updateLastAssistant((message) => ({
+                ...message,
+                loading: { ...message.loading, stage2: true },
+              }));
+              setCouncilProgress((previous) => ({
+                ...previous,
+                phase: 'stage2',
+                models: previous.models.map((model) => ({
+                  ...model,
+                  stage2: 'active',
+                })),
+              }));
+              break;
 
-          case 'stage2_complete':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.stage2 = event.data;
-              lastMsg.metadata = event.metadata;
-              lastMsg.loading.stage2 = false;
-              return { ...prev, messages };
-            });
-            break;
+            case 'stage2_complete': {
+              const successful = new Set(
+                (event.data || []).map((result) => result.model)
+              );
+              updateLastAssistant((message) => ({
+                ...message,
+                stage2: event.data,
+                metadata: event.metadata,
+                loading: { ...message.loading, stage2: false },
+              }));
+              setCouncilProgress((previous) => ({
+                ...previous,
+                models: previous.models.map((model) => ({
+                  ...model,
+                  stage2: successful.has(model.id)
+                    ? 'complete'
+                    : 'failed',
+                })),
+              }));
+              break;
+            }
 
-          case 'stage3_start':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage3 = true;
-              return { ...prev, messages };
-            });
-            break;
+            case 'stage3_start':
+              updateLastAssistant((message) => ({
+                ...message,
+                loading: { ...message.loading, stage3: true },
+              }));
+              setCouncilProgress((previous) => ({
+                ...previous,
+                phase: 'stage3',
+                chairman: {
+                  id: event.data?.chairman_model || previous.chairman.id,
+                  stage3: 'active',
+                },
+              }));
+              break;
 
-          case 'stage3_complete':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.stage3 = event.data;
-              lastMsg.loading.stage3 = false;
-              return { ...prev, messages };
-            });
-            break;
+            case 'stage3_complete': {
+              const failed = event.data?.response?.startsWith('Error:');
+              updateLastAssistant((message) => ({
+                ...message,
+                stage3: event.data,
+                loading: { ...message.loading, stage3: false },
+              }));
+              setCouncilProgress((previous) => ({
+                ...previous,
+                chairman: {
+                  ...previous.chairman,
+                  stage3: failed ? 'failed' : 'complete',
+                },
+              }));
+              break;
+            }
 
-          case 'title_complete':
-            // Reload conversations to get updated title
-            loadConversations();
-            break;
+            case 'title_complete':
+              loadConversations();
+              break;
 
-          case 'complete':
-            // Stream complete, reload conversations list
-            loadConversations();
-            setIsLoading(false);
-            break;
+            case 'complete':
+              setCouncilProgress((previous) => ({
+                ...previous,
+                phase: 'complete',
+              }));
+              loadConversations();
+              setIsLoading(false);
+              break;
 
-          case 'error':
-            console.error('Stream error:', event.message);
-            setIsLoading(false);
-            break;
+            case 'error':
+              console.error('Stream error:', event.message);
+              setCouncilProgress((previous) => ({
+                ...previous,
+                phase: 'error',
+                error: event.message,
+                models: previous.models.map((model) => ({
+                  ...model,
+                  stage1: model.stage1 === 'active'
+                    ? 'failed'
+                    : model.stage1,
+                  stage2: model.stage2 === 'active'
+                    ? 'failed'
+                    : model.stage2,
+                })),
+                chairman: {
+                  ...previous.chairman,
+                  stage3: previous.chairman.stage3 === 'active'
+                    ? 'failed'
+                    : previous.chairman.stage3,
+                },
+              }));
+              setModelError(event.message);
+              setIsLoading(false);
+              break;
 
-          default:
-            console.log('Unknown event type:', eventType);
+            default:
+              console.log('Unknown event type:', eventType);
+          }
         }
-      });
+      );
+
+      if (!['complete', 'error'].includes(terminalEvent)) {
+        throw new Error('The council stream ended unexpectedly.');
+      }
     } catch (error) {
       console.error('Failed to send message:', error);
-      // Remove optimistic messages on error
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: prev.messages.slice(0, -2),
+      setCouncilProgress((previous) => ({
+        ...previous,
+        phase: 'error',
+        error: error.message,
       }));
+      setModelError(error.message);
       setIsLoading(false);
     }
   };
@@ -188,12 +449,25 @@ function App() {
         currentConversationId={currentConversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        availableModels={availableModels}
+        selectedModels={selectedModels}
+        chairmanModel={chairmanModel}
+        onToggleModel={handleToggleModel}
+        onChairmanChange={handleChairmanChange}
+        onRefreshModels={loadModels}
+        modelsLoading={modelsLoading}
+        modelError={modelError}
+        selectionDisabled={isLoading}
       />
-      <ChatInterface
-        conversation={currentConversation}
-        onSendMessage={handleSendMessage}
-        isLoading={isLoading}
-      />
+
+      <main className="council-workspace">
+        <CouncilFlow progress={councilProgress} />
+        <ChatInterface
+          conversation={currentConversation}
+          onSendMessage={handleSendMessage}
+          isLoading={isLoading}
+        />
+      </main>
     </div>
   );
 }
