@@ -21,11 +21,109 @@ function providerLabel(provider) {
 }
 
 
+function ConversationItem({
+  conversation,
+  isActive,
+  onSelect,
+  onDelete,
+  onRename,
+}) {
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(conversation.title || '');
+
+  const startRenaming = (event) => {
+    event.stopPropagation();
+    setDraftTitle(conversation.title || '');
+    setIsRenaming(true);
+  };
+
+  const commitRename = () => {
+    const trimmed = draftTitle.trim();
+    setIsRenaming(false);
+    if (trimmed && trimmed !== conversation.title) {
+      onRename(conversation.id, trimmed);
+    }
+  };
+
+  const handleRenameKeyDown = (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      commitRename();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      setIsRenaming(false);
+    }
+  };
+
+  const handleDelete = (event) => {
+    event.stopPropagation();
+    if (window.confirm(`Delete "${conversation.title || 'this conversation'}"? This cannot be undone.`)) {
+      onDelete(conversation.id);
+    }
+  };
+
+  return (
+    <div className={`conversation-item ${isActive ? 'active' : ''}`}>
+      <button
+        type="button"
+        className="conversation-select"
+        onClick={() => onSelect(conversation.id)}
+      >
+        {isRenaming ? (
+          <input
+            type="text"
+            className="conversation-rename-input"
+            value={draftTitle}
+            autoFocus
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => setDraftTitle(event.target.value)}
+            onBlur={commitRename}
+            onKeyDown={handleRenameKeyDown}
+          />
+        ) : (
+          <span className="conversation-title">
+            {conversation.title || 'New Conversation'}
+          </span>
+        )}
+        <span className="conversation-meta">
+          {conversation.message_count} messages
+        </span>
+      </button>
+
+      {!isRenaming && (
+        <div className="conversation-actions">
+          <button
+            type="button"
+            className="conversation-action-btn"
+            onClick={startRenaming}
+            aria-label="Rename conversation"
+            title="Rename"
+          >
+            ✎
+          </button>
+          <button
+            type="button"
+            className="conversation-action-btn conversation-action-btn--danger"
+            onClick={handleDelete}
+            aria-label="Delete conversation"
+            title="Delete"
+          >
+            🗑
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export default function Sidebar({
   conversations,
   currentConversationId,
   onSelectConversation,
   onNewConversation,
+  onDeleteConversation,
+  onRenameConversation,
   availableModels,
   selectedModels,
   chairmanModel,
@@ -35,11 +133,21 @@ export default function Sidebar({
   modelsLoading,
   modelError,
   selectionDisabled,
+  open,
 }) {
   const [modelsOpen, setModelsOpen] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const filteredConversations = searchQuery.trim()
+    ? conversations.filter((conversation) => (
+        (conversation.title || 'New Conversation')
+          .toLowerCase()
+          .includes(searchQuery.trim().toLowerCase())
+      ))
+    : conversations;
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${open ? 'sidebar--open' : ''}`}>
       <div className="sidebar-header">
         <div className="sidebar-brand-row">
           <div>
@@ -169,33 +277,42 @@ export default function Sidebar({
       </section>
 
       <div className="conversation-section-label">Conversations</div>
+
+      {conversations.length > 0 && (
+        <div className="conversation-search">
+          <input
+            type="search"
+            placeholder="Search conversations…"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            aria-label="Search conversations"
+          />
+        </div>
+      )}
+
       <nav className="conversation-list" aria-label="Conversations">
         {conversations.length === 0 ? (
           <div className="no-conversations">
             <span className="no-conversations-icon">◇</span>
             No conversations yet
           </div>
+        ) : filteredConversations.length === 0 ? (
+          <div className="no-conversations">
+            No conversations match &ldquo;{searchQuery}&rdquo;
+          </div>
         ) : (
-          conversations.map((conversation) => (
-            <button
+          filteredConversations.map((conversation) => (
+            <ConversationItem
               key={conversation.id}
-              type="button"
-              className={`conversation-item ${
-                conversation.id === currentConversationId ? 'active' : ''
-              }`}
-              onClick={() => onSelectConversation(conversation.id)}
-            >
-              <span className="conversation-title">
-                {conversation.title || 'New Conversation'}
-              </span>
-              <span className="conversation-meta">
-                {conversation.message_count} messages
-              </span>
-            </button>
+              conversation={conversation}
+              isActive={conversation.id === currentConversationId}
+              onSelect={onSelectConversation}
+              onDelete={onDeleteConversation}
+              onRename={onRenameConversation}
+            />
           ))
         )}
       </nav>
     </aside>
   );
 }
-

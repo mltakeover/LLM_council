@@ -62,6 +62,30 @@
   white-space: pre-wrap;
 }
 
+.conversation-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.export-button {
+  padding: 6px 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.export-button:hover {
+  border-color: #84adff;
+  color: #175cd3;
+  background: #f8faff;
+}
+
 .loading-indicator {
   display: flex;
   align-items: center;
@@ -69,6 +93,52 @@
   padding: 16px;
   color: #666;
   font-size: 14px;
+}
+
+.cancel-button {
+  margin-left: auto;
+  padding: 6px 14px;
+  border: 1px solid #fecdca;
+  border-radius: 6px;
+  background: #fff4f2;
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.cancel-button:hover {
+  background: #fee4e2;
+  border-color: #fda29b;
+}
+
+.retry-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  margin: 8px 0;
+  background: #fff4f2;
+  border: 1px solid #fecdca;
+  border-radius: 8px;
+  color: #b42318;
+  font-size: 13px;
+}
+
+.retry-button {
+  padding: 6px 14px;
+  border: 1px solid #b42318;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.retry-button:hover {
+  background: #b42318;
+  color: #ffffff;
 }
 
 .stage-loading {
@@ -120,8 +190,9 @@
   font-family: inherit;
   line-height: 1.5;
   outline: none;
-  resize: vertical;
-  min-height: 80px;
+  resize: none;
+  overflow-y: auto;
+  min-height: 52px;
   max-height: 300px;
 }
 
@@ -160,4 +231,14 @@
   cursor: not-allowed;
   background: #ccc;
   border-color: #ccc;
+}
+
+.send-button--cancel {
+  background: #b42318;
+  border-color: #b42318;
+}
+
+.send-button--cancel:hover {
+  background: #912018;
+  border-color: #912018;
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import Markdown from './Markdown';
 import { shortModelName } from '../utils/modelDisplay';
 import './Stage2.css';
 
@@ -14,12 +14,31 @@ function deAnonymizeText(text, labelToModel) {
   return result;
 }
 
+function formatDuration(seconds) {
+  return seconds == null ? null : `${seconds.toFixed(1)}s`;
+}
+
 export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
   const [activeTab, setActiveTab] = useState(0);
 
   if (!rankings || rankings.length === 0) {
     return null;
   }
+
+  const handleTabKeyDown = (event) => {
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      setActiveTab((previous) => (previous + 1) % rankings.length);
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      setActiveTab((previous) => (
+        (previous - 1 + rankings.length) % rankings.length
+      ));
+    }
+  };
+
+  const active = rankings[activeTab];
+  const duration = formatDuration(active.elapsed_seconds);
 
   return (
     <div className="stage stage2">
@@ -31,10 +50,21 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
         Below, model names are shown in <strong>bold</strong> for readability, but the original evaluation used anonymous labels.
       </p>
 
-      <div className="tabs">
+      <div
+        className="tabs"
+        role="tablist"
+        aria-label="Peer ranking evaluations"
+        onKeyDown={handleTabKeyDown}
+      >
         {rankings.map((rank, index) => (
           <button
             key={index}
+            id={`stage2-tab-${index}`}
+            role="tab"
+            type="button"
+            aria-selected={activeTab === index}
+            aria-controls={`stage2-panel-${index}`}
+            tabIndex={activeTab === index ? 0 : -1}
             className={`tab ${activeTab === index ? 'active' : ''}`}
             onClick={() => setActiveTab(index)}
           >
@@ -43,22 +73,27 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
         ))}
       </div>
 
-      <div className="tab-content">
+      <div
+        className="tab-content"
+        role="tabpanel"
+        id={`stage2-panel-${activeTab}`}
+        aria-labelledby={`stage2-tab-${activeTab}`}
+      >
         <div className="ranking-model">
-          {rankings[activeTab].model}
+          {active.model}
+          {duration && <span className="model-timing"> · {duration}</span>}
         </div>
         <div className="ranking-content markdown-content">
-          <ReactMarkdown>
-            {deAnonymizeText(rankings[activeTab].ranking, labelToModel)}
-          </ReactMarkdown>
+          <Markdown>
+            {deAnonymizeText(active.ranking, labelToModel)}
+          </Markdown>
         </div>
 
-        {rankings[activeTab].parsed_ranking &&
-         rankings[activeTab].parsed_ranking.length > 0 && (
+        {active.parsed_ranking && active.parsed_ranking.length > 0 && (
           <div className="parsed-ranking">
             <strong>Extracted Ranking:</strong>
             <ol>
-              {rankings[activeTab].parsed_ranking.map((label, i) => (
+              {active.parsed_ranking.map((label, i) => (
                 <li key={i}>
                   {labelToModel && labelToModel[label]
                     ? shortModelName(labelToModel[label])
