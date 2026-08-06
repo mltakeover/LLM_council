@@ -1,0 +1,25 @@
+.code-block-wrapper {
+  position: relative;
+}
+
+.code-block-wrapper .code-block-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.code-block-wrapper:hover .code-block-copy,
+.code-block-wrapper .code-block-copy:focus-visible {
+  opacity: 1;
+}
+
+/* Touch devices have no hover state, so keep the button reachable. */
+@media (hover: none) {
+  .code-block-wrapper .code-block-copy {
+    position: static;
+    opacity: 1;
+    margin-bottom: 4px;
+  }
+}
