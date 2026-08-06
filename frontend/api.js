@@ -2,7 +2,7 @@
  * API client for the LLM Council backend.
  */
 
-const API_BASE = 'http://localhost:8001';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001';
 
 async function responseError(response, fallback) {
   try {
@@ -44,6 +44,32 @@ export const api = {
     return response.json();
   },
 
+  async deleteConversation(conversationId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}`,
+      { method: 'DELETE' }
+    );
+    if (!response.ok) {
+      throw await responseError(response, 'Failed to delete conversation');
+    }
+    return response.json();
+  },
+
+  async renameConversation(conversationId, title) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      }
+    );
+    if (!response.ok) {
+      throw await responseError(response, 'Failed to rename conversation');
+    }
+    return response.json();
+  },
+
   /** Discover configured cloud models and currently installed Ollama models. */
   async getModels() {
     const response = await fetch(`${API_BASE}/api/models`, {
@@ -66,6 +92,7 @@ export const api = {
           models: options.models,
           chairman_model: options.chairmanModel,
         }),
+        signal: options.signal,
       }
     );
     if (!response.ok) {
@@ -76,6 +103,7 @@ export const api = {
 
   /**
    * Send a message and parse server-sent events safely across network chunks.
+   * Pass `options.signal` (an AbortSignal) to allow cancelling mid-stream.
    */
   async sendMessageStream(
     conversationId,
@@ -93,6 +121,7 @@ export const api = {
           models: options.models,
           chairman_model: options.chairmanModel,
         }),
+        signal: options.signal,
       }
     );
 
@@ -129,14 +158,21 @@ export const api = {
       }
     };
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const blocks = buffer.split(/\r?\n\r?\n/);
-      buffer = blocks.pop() || '';
-      blocks.forEach(processBlock);
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split(/\r?\n\r?\n/);
+        buffer = blocks.pop() || '';
+        blocks.forEach(processBlock);
+      }
+    } catch (error) {
+      // Release the reader's lock so an aborted fetch doesn't leave the
+      // underlying stream in a half-consumed state.
+      reader.cancel().catch(() => {});
+      throw error;
     }
 
     buffer += decoder.decode();

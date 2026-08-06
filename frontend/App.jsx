@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import CouncilFlow from './components/CouncilFlow';
@@ -41,6 +41,10 @@ function App() {
   const [councilProgress, setCouncilProgress] = useState(
     createProgress([], null)
   );
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [lastFailedContent, setLastFailedContent] = useState(null);
+
+  const abortControllerRef = useRef(null);
 
   useEffect(() => {
     loadConversations();
@@ -160,6 +164,38 @@ function App() {
 
   const handleSelectConversation = (id) => {
     setCurrentConversationId(id);
+    setSidebarOpen(false);
+  };
+
+  const handleDeleteConversation = async (id) => {
+    try {
+      await api.deleteConversation(id);
+      setConversations((previous) => previous.filter((c) => c.id !== id));
+      if (id === currentConversationId) {
+        setCurrentConversationId(null);
+        setCurrentConversation(null);
+      }
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+      setModelError(error.message);
+    }
+  };
+
+  const handleRenameConversation = async (id, title) => {
+    try {
+      const updated = await api.renameConversation(id, title);
+      setConversations((previous) => previous.map((c) => (
+        c.id === id ? { ...c, title: updated.title } : c
+      )));
+      setCurrentConversation((previous) => (
+        previous && previous.id === id
+          ? { ...previous, title: updated.title }
+          : previous
+      ));
+    } catch (error) {
+      console.error('Failed to rename conversation:', error);
+      setModelError(error.message);
+    }
   };
 
   const handleToggleModel = (modelId) => {
@@ -223,8 +259,12 @@ function App() {
     const activeModels = [...selectedModels];
     const activeChairman = chairmanModel || activeModels[0];
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setIsLoading(true);
     setModelError(null);
+    setLastFailedContent(null);
     setCouncilProgress(
       createProgress(activeModels, activeChairman, 'connecting')
     );
@@ -263,6 +303,7 @@ function App() {
         {
           models: activeModels,
           chairmanModel: activeChairman,
+          signal: controller.signal,
         },
         (eventType, event) => {
           switch (eventType) {
@@ -392,6 +433,7 @@ function App() {
                 phase: 'complete',
               }));
               loadConversations();
+              setLastFailedContent(null);
               setIsLoading(false);
               break;
 
@@ -418,6 +460,7 @@ function App() {
                 },
               }));
               setModelError(event.message);
+              setLastFailedContent(content);
               setIsLoading(false);
               break;
 
@@ -431,24 +474,78 @@ function App() {
         throw new Error('The council stream ended unexpectedly.');
       }
     } catch (error) {
-      console.error('Failed to send message:', error);
-      setCouncilProgress((previous) => ({
-        ...previous,
-        phase: 'error',
-        error: error.message,
-      }));
-      setModelError(error.message);
+      if (error.name === 'AbortError') {
+        setCouncilProgress((previous) => ({
+          ...previous,
+          phase: 'cancelled',
+          error: null,
+          models: previous.models.map((model) => ({
+            ...model,
+            stage1: model.stage1 === 'active' ? 'failed' : model.stage1,
+            stage2: model.stage2 === 'active' ? 'failed' : model.stage2,
+          })),
+          chairman: {
+            ...previous.chairman,
+            stage3: previous.chairman.stage3 === 'active'
+              ? 'failed'
+              : previous.chairman.stage3,
+          },
+        }));
+      } else {
+        console.error('Failed to send message:', error);
+        setCouncilProgress((previous) => ({
+          ...previous,
+          phase: 'error',
+          error: error.message,
+        }));
+        setModelError(error.message);
+      }
+      setLastFailedContent(content);
       setIsLoading(false);
+    } finally {
+      abortControllerRef.current = null;
+    }
+  };
+
+  const handleCancelMessage = () => {
+    abortControllerRef.current?.abort();
+  };
+
+  const handleRetry = () => {
+    if (lastFailedContent && !isLoading) {
+      const content = lastFailedContent;
+      setLastFailedContent(null);
+      handleSendMessage(content);
     }
   };
 
   return (
     <div className="app">
+      <button
+        type="button"
+        className="mobile-sidebar-toggle"
+        onClick={() => setSidebarOpen((open) => !open)}
+        aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+        aria-expanded={sidebarOpen}
+      >
+        <span aria-hidden="true">☰</span>
+      </button>
+
+      {sidebarOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       <Sidebar
         conversations={conversations}
         currentConversationId={currentConversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        onDeleteConversation={handleDeleteConversation}
+        onRenameConversation={handleRenameConversation}
         availableModels={availableModels}
         selectedModels={selectedModels}
         chairmanModel={chairmanModel}
@@ -458,6 +555,7 @@ function App() {
         modelsLoading={modelsLoading}
         modelError={modelError}
         selectionDisabled={isLoading}
+        open={sidebarOpen}
       />
 
       <main className="council-workspace">
@@ -465,6 +563,9 @@ function App() {
         <ChatInterface
           conversation={currentConversation}
           onSendMessage={handleSendMessage}
+          onCancelMessage={handleCancelMessage}
+          onRetry={handleRetry}
+          canRetry={Boolean(lastFailedContent)}
           isLoading={isLoading}
         />
       </main>
