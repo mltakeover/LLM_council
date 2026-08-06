@@ -1,0 +1,242 @@
+"""Configuration for LLM Council using cloud providers and local Ollama models."""
+
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+def _csv_values(value: str) -> list[str]:
+    """Return unique, non-empty comma-separated values in their original order."""
+
+    return list(
+        dict.fromkeys(
+            item.strip()
+            for item in value.split(",")
+            if item.strip()
+        )
+    )
+
+
+def _is_configured_api_key(value: str | None) -> bool:
+    """Reject missing values and common documentation placeholders."""
+
+    if not value or not value.strip():
+        return False
+
+    normalized = value.strip().lower()
+    placeholder_values = {
+        "redacted",
+        "replace-me",
+        "replace_me",
+        "your-api-key",
+    }
+
+    return (
+        normalized not in placeholder_values
+        and not normalized.startswith("your-")
+        and not normalized.startswith("<your-")
+    )
+
+
+DATA_DIR = os.getenv("DATA_DIR", "data/conversations")
+REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "300"))
+TITLE_TIMEOUT = float(os.getenv("TITLE_TIMEOUT", "90"))
+ANTHROPIC_MAX_TOKENS = int(
+    os.getenv("ANTHROPIC_MAX_TOKENS", "8192")
+)
+
+OLLAMA_BASE_URL = os.getenv(
+    "OLLAMA_BASE_URL",
+    "http://127.0.0.1:11434/v1/",
+).strip()
+
+OLLAMA_MAX_CONCURRENCY = int(
+    os.getenv("OLLAMA_MAX_CONCURRENCY", "1")
+)
+
+if OLLAMA_MAX_CONCURRENCY < 1:
+    raise RuntimeError("OLLAMA_MAX_CONCURRENCY must be at least 1.")
+
+
+API_KEYS = {
+    "openai": os.getenv("OPENAI_API_KEY"),
+    "anthropic": os.getenv("ANTHROPIC_API_KEY"),
+    "google": os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"),
+    "xai": os.getenv("XAI_API_KEY"),
+}
+
+
+MODEL_NAMES = {
+    "openai": os.getenv("OPENAI_MODEL", "gpt-5.6-terra"),
+    "anthropic": os.getenv(
+        "ANTHROPIC_MODEL",
+        "claude-sonnet-5",
+    ),
+    "google": os.getenv(
+        "GEMINI_MODEL",
+        "gemini-3.6-flash",
+    ),
+    "xai": os.getenv("XAI_MODEL", "grok-4.5"),
+}
+
+
+# OLLAMA_MODELS supports multiple local council members. OLLAMA_MODEL remains
+# supported as a backwards-compatible single-model setting.
+_ollama_models_value = os.getenv("OLLAMA_MODELS")
+
+if _ollama_models_value is None:
+    _ollama_models_value = os.getenv(
+        "OLLAMA_MODEL",
+        "qwen3.6:latest,qwen2.5-coder:7b",
+    )
+
+OLLAMA_MODELS = _csv_values(_ollama_models_value)
+
+
+SUPPORTED_PROVIDERS = (
+    "openai",
+    "anthropic",
+    "google",
+    "xai",
+    "ollama",
+)
+
+PROVIDERS_REQUIRING_KEYS = frozenset(API_KEYS.keys())
+
+
+# The safe default is local-only. Set COUNCIL_PROVIDERS explicitly in .env
+# after adding real cloud API keys.
+COUNCIL_PROVIDERS = _csv_values(
+    os.getenv("COUNCIL_PROVIDERS", "ollama").lower()
+)
+
+if not COUNCIL_PROVIDERS:
+    raise RuntimeError("COUNCIL_PROVIDERS must contain at least one provider.")
+
+
+unknown_providers = [
+    provider
+    for provider in COUNCIL_PROVIDERS
+    if provider not in SUPPORTED_PROVIDERS
+]
+
+if unknown_providers:
+    raise RuntimeError(
+        "Unsupported providers in COUNCIL_PROVIDERS: "
+        + ", ".join(unknown_providers)
+    )
+
+
+missing_or_placeholder_keys = [
+    provider
+    for provider in COUNCIL_PROVIDERS
+    if (
+        provider in PROVIDERS_REQUIRING_KEYS
+        and not _is_configured_api_key(API_KEYS.get(provider))
+    )
+]
+
+if missing_or_placeholder_keys:
+    raise RuntimeError(
+        "Missing or placeholder API keys for configured providers: "
+        + ", ".join(missing_or_placeholder_keys)
+        + ". Add real keys to .env or remove those providers from "
+        "COUNCIL_PROVIDERS."
+    )
+
+if "ollama" in COUNCIL_PROVIDERS and not OLLAMA_MODELS:
+    raise RuntimeError(
+        "Ollama is configured but OLLAMA_MODELS does not contain a model."
+    )
+
+
+# Model IDs use provider:model-name. Splitting on the first colon preserves
+# Ollama tags such as ollama:qwen3.6:latest.
+COUNCIL_MODELS: list[str] = []
+
+for provider in COUNCIL_PROVIDERS:
+    if provider == "ollama":
+        COUNCIL_MODELS.extend(
+            f"ollama:{model_name}"
+            for model_name in OLLAMA_MODELS
+        )
+    else:
+        COUNCIL_MODELS.append(
+            f"{provider}:{MODEL_NAMES[provider]}"
+        )
+
+if not COUNCIL_MODELS:
+    raise RuntimeError("No council models have been configured.")
+
+
+CHAIRMAN_PROVIDER = os.getenv(
+    "CHAIRMAN_PROVIDER",
+    COUNCIL_PROVIDERS[0],
+).strip().lower()
+
+if CHAIRMAN_PROVIDER not in SUPPORTED_PROVIDERS:
+    raise RuntimeError(
+        f"Unsupported CHAIRMAN_PROVIDER: {CHAIRMAN_PROVIDER}"
+    )
+
+if (
+    CHAIRMAN_PROVIDER in PROVIDERS_REQUIRING_KEYS
+    and not _is_configured_api_key(API_KEYS.get(CHAIRMAN_PROVIDER))
+):
+    raise RuntimeError(
+        "Missing or placeholder API key for chairman provider: "
+        f"{CHAIRMAN_PROVIDER}"
+    )
+
+if CHAIRMAN_PROVIDER == "ollama":
+    default_ollama_chairman = (
+        OLLAMA_MODELS[0]
+        if OLLAMA_MODELS
+        else "qwen3.6:latest"
+    )
+    ollama_chairman_model = os.getenv(
+        "OLLAMA_CHAIRMAN_MODEL",
+        default_ollama_chairman,
+    ).strip()
+
+    if not ollama_chairman_model:
+        raise RuntimeError("OLLAMA_CHAIRMAN_MODEL cannot be empty.")
+
+    CHAIRMAN_MODEL = f"ollama:{ollama_chairman_model}"
+else:
+    CHAIRMAN_MODEL = (
+        f"{CHAIRMAN_PROVIDER}:{MODEL_NAMES[CHAIRMAN_PROVIDER]}"
+    )
+
+
+# Use an installed, lightweight local model for titles by default. This avoids
+# an extra billed cloud request for every new conversation.
+TITLE_MODEL = os.getenv(
+    "TITLE_MODEL",
+    "ollama:llama3.1:latest",
+).strip()
+
+title_provider, separator, title_model_name = TITLE_MODEL.partition(":")
+title_provider = title_provider.lower().strip()
+
+if not separator or not title_model_name.strip():
+    raise RuntimeError(
+        "TITLE_MODEL must use the format provider:model-name."
+    )
+
+if title_provider not in SUPPORTED_PROVIDERS:
+    raise RuntimeError(
+        f"Unsupported provider in TITLE_MODEL: {title_provider}"
+    )
+
+if (
+    title_provider in PROVIDERS_REQUIRING_KEYS
+    and not _is_configured_api_key(API_KEYS.get(title_provider))
+):
+    raise RuntimeError(
+        "Missing or placeholder API key for TITLE_MODEL provider: "
+        f"{title_provider}"
+    )
+

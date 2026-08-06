@@ -1,0 +1,20 @@
+{
+  "id": "b3acda85-8dca-4c30-92cc-6ae0b9e24750",
+  "created_at": "2026-08-06T18:35:05.560308",
+  "title": "New Conversation",
+  "messages": [
+    {
+      "role": "user",
+      "content": "please valideajgde"
+    },
+    {
+      "role": "assistant",
+      "stage1": [],
+      "stage2": [],
+      "stage3": {
+        "model": "openai:your-selected-openai-model",
+        "response": "Error: Unable to generate final synthesis."
+      }
+    }
+  ]
+}
