@@ -7,6 +7,35 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Shared design tokens. This is the one palette for the whole app —
+     Sidebar.css and CouncilFlow.css established it first, these variables
+     let the chat/stage panels match instead of drifting to their own blue. */
+  --color-primary-50: #f5f8ff;
+  --color-primary-100: #eaf1ff;
+  --color-primary-200: #b2ccff;
+  --color-primary-600: #2563eb;
+  --color-primary-700: #1d4ed8;
+  --color-accent-600: #6366f1;
+
+  --color-text-primary: #172033;
+  --color-text-secondary: #344054;
+  --color-text-tertiary: #667085;
+  --color-text-quaternary: #98a2b3;
+
+  --color-border: #dfe5ee;
+  --color-border-strong: #d0d5dd;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f8fafc;
+  --color-surface-muted: #f5f5f5;
+
+  --color-success-600: #059669;
+  --color-success-100: #ecfdf5;
+  --color-success-200: #86efac;
+
+  --color-danger-600: #b42318;
+  --color-danger-100: #fff4f2;
+  --color-danger-200: #fecdca;
 }
 
 * {
@@ -19,7 +48,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: #f5f5f5;
+  background: var(--color-surface-muted);
 }
 
 /* Visible keyboard focus everywhere interactive, without adding a ring on
@@ -31,7 +60,7 @@ input:focus-visible,
 textarea:focus-visible,
 select:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid #4a90e2;
+  outline: 2px solid var(--color-primary-600);
   outline-offset: 2px;
 }
 
@@ -43,7 +72,7 @@ select:focus-visible,
 
 /* Per-model response timing, shown next to model names in Stage 1/2/3 */
 .model-timing {
-  color: #98a2b3;
+  color: var(--color-text-quaternary);
   font-weight: 500;
 }
 

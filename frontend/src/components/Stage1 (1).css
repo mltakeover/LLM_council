@@ -1,0 +1,83 @@
+.stage {
+  margin: 24px 0;
+  padding: 20px;
+  background: var(--color-surface-subtle);
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+}
+
+.stage-title {
+  margin: 0 0 16px 0;
+  color: var(--color-text-primary);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.tab {
+  padding: 8px 16px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px 8px 0 0;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.tab:hover {
+  background: var(--color-primary-50);
+  color: var(--color-text-secondary);
+  border-color: var(--color-primary-200);
+}
+
+.tab.active {
+  background: var(--color-surface);
+  color: var(--color-primary-600);
+  border-color: var(--color-primary-600);
+  border-bottom-color: var(--color-surface);
+  font-weight: 600;
+}
+
+/* Small provider-colored dot, so tabs are scannable by provider at a
+   glance without reading the label — reuses the Sidebar's provider hues. */
+.tab-provider-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+.tab-provider-dot--openai { background: #067647; }
+.tab-provider-dot--anthropic { background: #b54708; }
+.tab-provider-dot--google { background: #175cd3; }
+.tab-provider-dot--xai { background: #101828; }
+.tab-provider-dot--ollama { background: #027a48; }
+
+.tab-content {
+  background: var(--color-surface);
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+}
+
+.model-name {
+  color: var(--color-text-quaternary);
+  font-size: 12px;
+  margin-bottom: 12px;
+  font-family: monospace;
+}
+
+.response-text {
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}

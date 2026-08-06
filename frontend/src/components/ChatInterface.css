@@ -3,7 +3,7 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #ffffff;
+  background: var(--color-surface);
 }
 
 .messages-container {
@@ -18,14 +18,14 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #666;
+  color: var(--color-text-tertiary);
   text-align: center;
 }
 
 .empty-state h2 {
   margin: 0 0 8px 0;
   font-size: 24px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .empty-state p {
@@ -45,18 +45,18 @@
 .message-label {
   font-size: 12px;
   font-weight: 600;
-  color: #666;
+  color: var(--color-text-tertiary);
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
 .user-message .message-content {
-  background: #f0f7ff;
+  background: var(--color-primary-50);
   padding: 16px;
-  border-radius: 8px;
-  border: 1px solid #d0e7ff;
-  color: #333;
+  border-radius: 10px;
+  border: 1px solid var(--color-primary-200);
+  color: var(--color-text-secondary);
   line-height: 1.6;
   max-width: 80%;
   white-space: pre-wrap;
@@ -70,10 +70,10 @@
 
 .export-button {
   padding: 6px 12px;
-  border: 1px solid #d0d5dd;
+  border: 1px solid var(--color-border-strong);
   border-radius: 6px;
-  background: #ffffff;
-  color: #475467;
+  background: var(--color-surface);
+  color: var(--color-text-tertiary);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -81,9 +81,9 @@
 }
 
 .export-button:hover {
-  border-color: #84adff;
-  color: #175cd3;
-  background: #f8faff;
+  border-color: var(--color-primary-200);
+  color: var(--color-primary-700);
+  background: var(--color-primary-50);
 }
 
 .loading-indicator {
@@ -91,17 +91,17 @@
   align-items: center;
   gap: 12px;
   padding: 16px;
-  color: #666;
+  color: var(--color-text-tertiary);
   font-size: 14px;
 }
 
 .cancel-button {
   margin-left: auto;
   padding: 6px 14px;
-  border: 1px solid #fecdca;
+  border: 1px solid var(--color-danger-200);
   border-radius: 6px;
-  background: #fff4f2;
-  color: #b42318;
+  background: var(--color-danger-100);
+  color: var(--color-danger-600);
   font-size: 12px;
   font-weight: 650;
   cursor: pointer;
@@ -118,27 +118,27 @@
   gap: 12px;
   padding: 12px 16px;
   margin: 8px 0;
-  background: #fff4f2;
-  border: 1px solid #fecdca;
+  background: var(--color-danger-100);
+  border: 1px solid var(--color-danger-200);
   border-radius: 8px;
-  color: #b42318;
+  color: var(--color-danger-600);
   font-size: 13px;
 }
 
 .retry-button {
   padding: 6px 14px;
-  border: 1px solid #b42318;
+  border: 1px solid var(--color-danger-600);
   border-radius: 6px;
-  background: #ffffff;
-  color: #b42318;
+  background: var(--color-surface);
+  color: var(--color-danger-600);
   font-size: 12px;
   font-weight: 650;
   cursor: pointer;
 }
 
 .retry-button:hover {
-  background: #b42318;
-  color: #ffffff;
+  background: var(--color-danger-600);
+  color: var(--color-surface);
 }
 
 .stage-loading {
@@ -147,10 +147,10 @@
   gap: 12px;
   padding: 16px;
   margin: 12px 0;
-  background: #f9fafb;
+  background: var(--color-surface-subtle);
   border-radius: 8px;
-  border: 1px solid #e0e0e0;
-  color: #666;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-tertiary);
   font-size: 14px;
   font-style: italic;
 }
@@ -158,8 +158,8 @@
 .spinner {
   width: 20px;
   height: 20px;
-  border: 2px solid #e0e0e0;
-  border-top-color: #4a90e2;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary-600);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -175,17 +175,17 @@
   align-items: flex-end;
   gap: 12px;
   padding: 24px;
-  border-top: 1px solid #e0e0e0;
-  background: #fafafa;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
 }
 
 .message-input {
   flex: 1;
   padding: 14px;
-  background: #ffffff;
-  border: 1px solid #d0d0d0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
   border-radius: 8px;
-  color: #333;
+  color: var(--color-text-secondary);
   font-size: 15px;
   font-family: inherit;
   line-height: 1.5;
@@ -197,20 +197,20 @@
 }
 
 .message-input:focus {
-  border-color: #4a90e2;
-  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.1);
+  border-color: var(--color-primary-600);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 .message-input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-  background: #f5f5f5;
+  background: var(--color-surface-muted);
 }
 
 .send-button {
   padding: 14px 28px;
-  background: #4a90e2;
-  border: 1px solid #4a90e2;
+  background: var(--color-primary-600);
+  border: 1px solid var(--color-primary-600);
   border-radius: 8px;
   color: #fff;
   font-size: 15px;
@@ -222,8 +222,8 @@
 }
 
 .send-button:hover:not(:disabled) {
-  background: #357abd;
-  border-color: #357abd;
+  background: var(--color-primary-700);
+  border-color: var(--color-primary-700);
 }
 
 .send-button:disabled {
@@ -234,8 +234,8 @@
 }
 
 .send-button--cancel {
-  background: #b42318;
-  border-color: #b42318;
+  background: var(--color-danger-600);
+  border-color: var(--color-danger-600);
 }
 
 .send-button--cancel:hover {
