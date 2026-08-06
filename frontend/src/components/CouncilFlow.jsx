@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { shortModelName as shortModelId, providerName as providerOf } from '../utils/modelDisplay';
 import './CouncilFlow.css';
 
 const PHASE_LABELS = {
@@ -12,15 +13,11 @@ const PHASE_LABELS = {
 };
 
 function shortModelName(modelId) {
-  if (!modelId) return 'Not selected';
-  const separator = modelId.indexOf(':');
-  return separator === -1 ? modelId : modelId.slice(separator + 1);
+  return modelId ? shortModelId(modelId) : 'Not selected';
 }
 
 function providerName(modelId) {
-  if (!modelId) return 'Chairman';
-  const provider = modelId.split(':', 1)[0];
-  return provider.charAt(0).toUpperCase() + provider.slice(1);
+  return modelId ? providerOf(modelId) : 'Chairman';
 }
 
 function statusText(status) {

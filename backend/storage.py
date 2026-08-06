@@ -2,6 +2,7 @@
 
 import json
 import os
+import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -13,8 +14,29 @@ def ensure_data_dir():
     Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
 
 
+def _is_valid_conversation_id(conversation_id: str) -> bool:
+    """Conversation IDs are always UUIDs minted by create_conversation.
+
+    Rejecting anything else here stops a crafted id (e.g. containing "../")
+    from ever reaching get_conversation_path and escaping DATA_DIR.
+    """
+    try:
+        uuid.UUID(conversation_id)
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
 def get_conversation_path(conversation_id: str) -> str:
-    """Get the file path for a conversation."""
+    """Get the file path for a conversation.
+
+    Raises ValueError for anything that isn't a plain UUID, so a path
+    traversal attempt (e.g. "../../etc/passwd") can never be joined onto
+    DATA_DIR in the first place.
+    """
+    if not _is_valid_conversation_id(conversation_id):
+        raise ValueError(f"Invalid conversation id: {conversation_id!r}")
+
     return os.path.join(DATA_DIR, f"{conversation_id}.json")
 
 
@@ -55,7 +77,12 @@ def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
     Returns:
         Conversation dict or None if not found
     """
-    path = get_conversation_path(conversation_id)
+    try:
+        path = get_conversation_path(conversation_id)
+    except ValueError:
+        # Malformed/malicious id (e.g. path traversal attempt) is treated
+        # the same as "not found" rather than surfacing a 500.
+        return None
 
     if not os.path.exists(path):
         return None

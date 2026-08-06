@@ -1,5 +1,7 @@
 """3-stage LLM Council orchestration."""
 
+import re
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import (
@@ -159,8 +161,6 @@ Provide a clear, well-reasoned final answer that represents the council's collec
 def parse_ranking_from_text(ranking_text: str) -> List[str]:
     """Parse the FINAL RANKING section from a model response."""
 
-    import re
-
     if "FINAL RANKING:" in ranking_text:
         parts = ranking_text.split("FINAL RANKING:")
         if len(parts) >= 2:
@@ -185,8 +185,6 @@ def calculate_aggregate_rankings(
     label_to_model: Dict[str, str],
 ) -> List[Dict[str, Any]]:
     """Calculate average rank position across all peer evaluations."""
-
-    from collections import defaultdict
 
     model_positions = defaultdict(list)
 

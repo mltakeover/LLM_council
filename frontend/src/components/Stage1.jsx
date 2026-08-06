@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { shortModelName } from '../utils/modelDisplay';
 import './Stage1.css';
 
 export default function Stage1({ responses }) {
@@ -20,7 +21,7 @@ export default function Stage1({ responses }) {
             className={`tab ${activeTab === index ? 'active' : ''}`}
             onClick={() => setActiveTab(index)}
           >
-            {resp.model.split('/')[1] || resp.model}
+            {shortModelName(resp.model)}
           </button>
         ))}
       </div>
