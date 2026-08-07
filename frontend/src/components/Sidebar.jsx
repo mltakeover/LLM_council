@@ -172,25 +172,75 @@ export default function Sidebar({
     : conversations;
 
   return (
-    <aside className={`sidebar ${open ? 'sidebar--open' : ''}`}>
-      <div className="sidebar-header">
-        <div className="sidebar-brand-row">
-          <div>
-            <div className="sidebar-kicker">MULTI-MODEL DELIBERATION</div>
-            <h1>LLM Council</h1>
+    <>
+      <div className={`sidebar-layout ${open ? 'sidebar-layout--open' : ''}`}>
+        <aside className="sidebar conversation-sidebar" aria-label="Conversation navigation">
+        <div className="sidebar-header">
+          <div className="sidebar-brand-row">
+            <div>
+              <div className="sidebar-kicker">MULTI-MODEL DELIBERATION</div>
+              <h1>LLM Council</h1>
+            </div>
+            <span className="sidebar-live-dot" title="Local application" />
           </div>
-          <span className="sidebar-live-dot" title="Local application" />
+
+          <button
+            className="new-conversation-btn"
+            onClick={onNewConversation}
+            type="button"
+          >
+            <span aria-hidden="true">＋</span>
+            New Conversation
+          </button>
         </div>
 
-        <button
-          className="new-conversation-btn"
-          onClick={onNewConversation}
-          type="button"
-        >
-          <span aria-hidden="true">＋</span>
-          New Conversation
-        </button>
-      </div>
+        <div className="conversation-section-label">Conversations</div>
+
+        {conversations.length > 0 && (
+          <div className="conversation-search">
+            <input
+              type="search"
+              placeholder="Search conversations…"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              aria-label="Search conversations"
+            />
+          </div>
+        )}
+
+        <nav className="conversation-list" aria-label="Conversations">
+          {conversations.length === 0 ? (
+            <div className="no-conversations">
+              <span className="no-conversations-icon">◇</span>
+              No conversations yet
+            </div>
+          ) : filteredConversations.length === 0 ? (
+            <div className="no-conversations">
+              No conversations match &ldquo;{searchQuery}&rdquo;
+            </div>
+          ) : (
+            filteredConversations.map((conversation) => (
+              <ConversationItem
+                key={conversation.id}
+                conversation={conversation}
+                isActive={conversation.id === currentConversationId}
+                onSelect={onSelectConversation}
+                onDelete={onDeleteConversation}
+                onRename={onRenameConversation}
+              />
+            ))
+          )}
+        </nav>
+        </aside>
+
+        <aside className="sidebar settings-sidebar" aria-label="Council configuration">
+        <div className="settings-sidebar-header">
+          <div>
+            <div className="sidebar-kicker">COUNCIL CONFIGURATION</div>
+            <h2>Models &amp; settings</h2>
+          </div>
+          <span className="settings-count">{selectedModels.length} selected</span>
+        </div>
 
       <section className="model-selector">
         <button
@@ -412,44 +462,9 @@ export default function Sidebar({
           </div>
         )}
       </section>
+        </aside>
+      </div>
 
-      <div className="conversation-section-label">Conversations</div>
-
-      {conversations.length > 0 && (
-        <div className="conversation-search">
-          <input
-            type="search"
-            placeholder="Search conversations…"
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            aria-label="Search conversations"
-          />
-        </div>
-      )}
-
-      <nav className="conversation-list" aria-label="Conversations">
-        {conversations.length === 0 ? (
-          <div className="no-conversations">
-            <span className="no-conversations-icon">◇</span>
-            No conversations yet
-          </div>
-        ) : filteredConversations.length === 0 ? (
-          <div className="no-conversations">
-            No conversations match &ldquo;{searchQuery}&rdquo;
-          </div>
-        ) : (
-          filteredConversations.map((conversation) => (
-            <ConversationItem
-              key={conversation.id}
-              conversation={conversation}
-              isActive={conversation.id === currentConversationId}
-              onSelect={onSelectConversation}
-              onDelete={onDeleteConversation}
-              onRename={onRenameConversation}
-            />
-          ))
-        )}
-      </nav>
       {providerStatusOpen && (
         <ProviderStatus
           models={availableModels}
@@ -457,6 +472,6 @@ export default function Sidebar({
           onClose={() => setProviderStatusOpen(false)}
         />
       )}
-    </aside>
+    </>
   );
 }

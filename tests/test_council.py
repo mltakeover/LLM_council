@@ -2,13 +2,15 @@ import uuid
 
 import pytest
 
-from backend import storage
+from backend import council, storage
 from backend.council import (
     ChairmanFinding,
     ChairmanReport,
     _report_to_markdown,
     calculate_aggregate_rankings,
     calculate_consensus_metrics,
+    create_fallback_conversation_title,
+    generate_conversation_title,
     get_model_recommendations,
     parse_ranking_from_text,
 )
@@ -53,6 +55,43 @@ def test_review_profiles_cover_architecture_and_code() -> None:
 
     assert {"general", "hld", "lld", "code", "security"} <= profile_ids
     assert "scalability" in get_review_profile("hld").objective.lower()
+
+
+def test_fallback_title_extracts_subject_and_intent() -> None:
+    title = create_fallback_conversation_title(
+        "Can you please review this HLD design for security risks?"
+    )
+
+    assert title == "HLD Security Risks Review"
+
+
+@pytest.mark.asyncio
+async def test_title_generation_uses_meaningful_fallback(monkeypatch) -> None:
+    async def failed_title_model(*_args, **_kwargs):
+        return {"ok": False, "content": ""}
+
+    monkeypatch.setattr(council, "query_model", failed_title_model)
+
+    title = await generate_conversation_title(
+        "How can I improve the Ollama model selection screen?"
+    )
+
+    assert title == "Ollama Model Selection Screen Improvements"
+
+
+@pytest.mark.asyncio
+async def test_title_generation_cleans_model_formatting(monkeypatch) -> None:
+    async def successful_title_model(*_args, **_kwargs):
+        return {
+            "ok": True,
+            "content": "**Title: Smarter Ollama Model Selection.**\nExtra text",
+        }
+
+    monkeypatch.setattr(council, "query_model", successful_title_model)
+
+    title = await generate_conversation_title("Improve the model picker")
+
+    assert title == "Smarter Ollama Model Selection"
 
 
 def test_ranking_parser_prefers_structured_json() -> None:

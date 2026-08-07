@@ -30,6 +30,7 @@ from .config import (
 from .council import (
     calculate_aggregate_rankings,
     calculate_consensus_metrics,
+    create_fallback_conversation_title,
     generate_conversation_title,
     get_model_recommendations,
     run_full_council,
@@ -55,9 +56,37 @@ from .review_profiles import (
 logger = logging.getLogger(__name__)
 
 
+async def _backfill_default_conversation_titles() -> int:
+    """Give existing conversations a useful title without making model calls."""
+
+    updated = 0
+    for conversation in await storage.get_all_conversations():
+        if conversation.get("title") != "New Conversation":
+            continue
+        first_question = next(
+            (
+                message.get("content", "")
+                for message in conversation.get("messages", [])
+                if message.get("role") == "user" and message.get("content", "").strip()
+            ),
+            "",
+        )
+        if not first_question:
+            continue
+        await storage.update_conversation_title(
+            conversation["id"],
+            create_fallback_conversation_title(first_question),
+        )
+        updated += 1
+    return updated
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await storage.initialize()
+    updated_titles = await _backfill_default_conversation_titles()
+    if updated_titles:
+        logger.info("Backfilled conversation titles count=%s", updated_titles)
     yield
 
 
@@ -862,6 +891,7 @@ async def send_message_stream(
 
     async def event_generator():
         title_task: Optional[asyncio.Task] = None
+        provisional_title: Optional[str] = None
         stage1_results: List[Dict[str, Any]] = []
         stage2_results: List[Dict[str, Any]] = []
         stage3_result: Optional[Dict[str, Any]] = None
@@ -887,6 +917,17 @@ async def send_message_stream(
                 "document_count": len(documents),
             })
             if needs_title:
+                provisional_title = create_fallback_conversation_title(
+                    request.content
+                )
+                await storage.update_conversation_title(
+                    conversation_id,
+                    provisional_title,
+                )
+                yield _sse("title_complete", {
+                    "title": provisional_title,
+                    "provisional": True,
+                })
                 title_task = asyncio.create_task(
                     generate_conversation_title(request.content)
                 )
@@ -1033,8 +1074,15 @@ async def send_message_stream(
             if title_task:
                 try:
                     title = await title_task
-                    await storage.update_conversation_title(conversation_id, title)
-                    yield _sse("title_complete", {"title": title})
+                    if title != provisional_title:
+                        await storage.update_conversation_title(
+                            conversation_id,
+                            title,
+                        )
+                        yield _sse("title_complete", {
+                            "title": title,
+                            "provisional": False,
+                        })
                 except Exception:
                     logger.exception(
                         "Conversation title update failed conversation=%s",

@@ -1,14 +1,59 @@
+.sidebar-layout {
+  display: contents;
+}
+
 .sidebar {
-  width: 310px;
-  min-width: 310px;
   min-height: 0;
   background: #f7f9fc;
-  border-right: 1px solid #dfe5ee;
   display: flex;
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
   color: #172033;
+}
+
+.conversation-sidebar {
+  order: 1;
+  width: 260px;
+  min-width: 260px;
+  border-right: 1px solid #dfe5ee;
+}
+
+.settings-sidebar {
+  order: 3;
+  width: 340px;
+  min-width: 340px;
+  border-left: 1px solid #dfe5ee;
+  background: #ffffff;
+}
+
+.settings-sidebar-header {
+  flex: 0 0 auto;
+  min-height: 73px;
+  padding: 17px 16px 14px;
+  border-bottom: 1px solid #dfe5ee;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-sidebar-header h2 {
+  margin: 0;
+  color: #172033;
+  font-size: 17px;
+  letter-spacing: -0.015em;
+}
+
+.settings-count {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #e8efff;
+  color: #175cd3;
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .sidebar-header {
@@ -73,13 +118,17 @@
 }
 
 .model-selector {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-height: 44px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   border-bottom: 1px solid #dfe5ee;
   background: #ffffff;
+}
+
+.settings-sidebar .model-selector {
+  border-bottom: 0;
 }
 
 .model-selector-heading {
@@ -487,7 +536,7 @@
   padding: 12px;
   border: 1px solid rgba(142, 162, 190, 0.3);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
+  background: #f8fafc;
 }
 
 .role-assignment-heading {
@@ -495,7 +544,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  color: var(--sidebar-heading, #edf4ff);
+  color: #344054;
   font-size: 0.78rem;
   font-weight: 700;
 }
@@ -503,7 +552,7 @@
 .role-assignment-heading button {
   border: 0;
   background: transparent;
-  color: #8db5ff;
+  color: #2563eb;
   cursor: pointer;
   font-size: 0.7rem;
 }
@@ -514,7 +563,7 @@
 }
 
 .role-assignment-panel > small {
-  color: #91a0b6;
+  color: #667085;
   font-size: 0.68rem;
   line-height: 1.35;
 }
@@ -526,7 +575,7 @@
 
 .role-assignment-field span {
   overflow: hidden;
-  color: #aebbd0;
+  color: #475467;
   font-size: 0.68rem;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -535,16 +584,21 @@
 .role-assignment-field input {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid rgba(150, 170, 201, 0.35);
+  border: 1px solid #d0d5dd;
   border-radius: 7px;
-  background: rgba(11, 25, 46, 0.55);
-  color: #f5f8ff;
+  background: #ffffff;
+  color: #344054;
   font-size: 0.73rem;
   padding: 7px 8px;
 }
 
 .role-assignment-field input::placeholder {
-  color: #74839a;
+  color: #98a2b3;
+}
+
+.role-assignment-field input:disabled {
+  background: #f2f4f7;
+  color: #667085;
 }
 
 .context-toggle {
@@ -576,29 +630,79 @@
   }
 }
 
-@media (max-width: 900px) {
-  .sidebar {
-    width: 270px;
-    min-width: 270px;
+@media (max-width: 1180px) {
+  .conversation-sidebar {
+    width: 230px;
+    min-width: 230px;
+  }
+
+  .settings-sidebar {
+    width: 300px;
+    min-width: 300px;
   }
 }
 
-/* Mobile: sidebar becomes a slide-in drawer instead of a fixed column */
-@media (max-width: 640px) {
-  .sidebar {
+/* Tablet/mobile: both panels share one slide-in drawer. */
+@media (max-width: 900px) {
+  .sidebar-layout {
     position: fixed;
-    top: 0;
-    left: 0;
+    inset: 0 auto 0 0;
     z-index: 30;
-    width: min(82vw, 320px);
-    min-width: 0;
-    transform: translateX(-100%);
+    width: min(92vw, 620px);
+    height: 100dvh;
+    display: flex;
+    background: #ffffff;
     box-shadow: 0 0 0 rgba(15, 23, 42, 0);
-    transition: transform 0.22s ease;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease, box-shadow 0.22s ease;
   }
 
-  .sidebar--open {
+  .sidebar-layout--open {
     transform: translateX(0);
     box-shadow: 8px 0 24px rgba(15, 23, 42, 0.18);
+  }
+
+  .sidebar {
+    position: static;
+    height: 100%;
+    min-width: 0;
+    transform: none;
+  }
+
+  .conversation-sidebar {
+    width: 42%;
+    flex: 0 0 42%;
+  }
+
+  .settings-sidebar {
+    width: 58%;
+    flex: 1 1 58%;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .sidebar-layout {
+    width: min(92vw, 370px);
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .conversation-sidebar,
+  .settings-sidebar {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .conversation-sidebar {
+    min-height: 310px;
+    flex: 0 0 42vh;
+    border-right: 0;
+    border-bottom: 1px solid #dfe5ee;
+  }
+
+  .settings-sidebar {
+    min-height: 430px;
+    flex: 1 0 58vh;
   }
 }

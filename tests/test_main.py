@@ -24,6 +24,26 @@ def test_context_is_newest_first_with_character_bound(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_existing_default_titles_are_backfilled(tmp_path) -> None:
+    storage.configure_database(
+        str(tmp_path / "titles.db"),
+        str(tmp_path / "legacy"),
+    )
+    conversation_id = str(uuid.uuid4())
+    await storage.create_conversation(conversation_id)
+    await storage.add_user_message(
+        conversation_id,
+        "Please compare local Ollama models for document analysis",
+    )
+
+    updated = await main._backfill_default_conversation_titles()
+    conversation = await storage.get_conversation(conversation_id)
+
+    assert updated == 1
+    assert conversation["title"] == "Local Ollama Models Document Analysis Comparison"
+
+
+@pytest.mark.asyncio
 async def test_cloud_model_requires_explicit_confirmation(monkeypatch) -> None:
     async def catalog():
         return {

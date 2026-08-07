@@ -1,4 +1,5 @@
 .council-workspace {
+  order: 2;
   flex: 1;
   min-width: 0;
   height: 100vh;

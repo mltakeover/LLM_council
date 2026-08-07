@@ -35,7 +35,7 @@
   display: none;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 900px) {
   .mobile-sidebar-toggle {
     display: block;
   }
