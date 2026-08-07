@@ -2,6 +2,7 @@ import Markdown from './Markdown';
 import CopyButton from './CopyButton';
 import ConsensusPanel from './ConsensusPanel';
 import FindingsDashboard from './FindingsDashboard';
+import AdaptiveReport from './AdaptiveReport';
 import { shortModelName } from '../utils/modelDisplay';
 import './Stage3.css';
 
@@ -37,12 +38,24 @@ export default function Stage3({ finalResponse, metadata }) {
               report={finalResponse.structured_report}
               metrics={metadata?.consensus_metrics}
             />
-            <FindingsDashboard report={finalResponse.structured_report} />
+            <AdaptiveReport report={finalResponse.structured_report} />
+            {finalResponse.structured_report?.findings?.length > 0 && (
+              <FindingsDashboard report={finalResponse.structured_report} />
+            )}
           </>
         )}
-        <div className="final-text markdown-content">
-          <Markdown>{finalResponse.response}</Markdown>
-        </div>
+        {finalResponse.structured_report ? (
+          <details className="full-report-details">
+            <summary>Full Markdown report</summary>
+            <div className="final-text markdown-content">
+              <Markdown>{finalResponse.response}</Markdown>
+            </div>
+          </details>
+        ) : (
+          <div className="final-text markdown-content">
+            <Markdown>{finalResponse.response}</Markdown>
+          </div>
+        )}
       </div>
     </div>
   );

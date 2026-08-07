@@ -37,9 +37,20 @@ from .council import (
     stage2_collect_rankings,
     stage3_synthesize_final,
 )
+from .council_modes import (
+    is_valid_council_mode,
+    list_council_modes,
+    resolve_council_mode,
+    resolve_role_assignments,
+)
 from .documents import DocumentExtractionError, extract_document
+from .evaluations import list_evaluation_cases
 from .providers import list_ollama_models, query_model
-from .review_profiles import is_valid_review_profile, list_review_profiles
+from .review_profiles import (
+    get_review_profile,
+    is_valid_review_profile,
+    list_review_profiles,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +61,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="LLM Council API", version="0.3.1", lifespan=lifespan)
+app = FastAPI(title="LLM Council API", version="0.4.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -73,12 +84,21 @@ def _normalized_review_profile(value: str) -> str:
     return normalized
 
 
+def _normalized_council_mode(value: str) -> str:
+    normalized = value.strip().lower()
+    if not is_valid_council_mode(normalized):
+        raise ValueError("unknown council mode")
+    return normalized
+
+
 class SendMessageRequest(BaseModel):
     run_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     content: str = Field(min_length=1, max_length=MAX_PROMPT_CHARACTERS)
     models: Optional[List[str]] = None
     chairman_model: Optional[str] = None
+    council_mode: str = "auto"
     review_profile: str = "general"
+    role_assignments: Dict[str, str] = Field(default_factory=dict)
     include_context: bool = True
     cloud_processing_confirmed: bool = False
     document_ids: List[str] = Field(
@@ -107,6 +127,27 @@ class SendMessageRequest(BaseModel):
     def profile_must_exist(cls, value: str) -> str:
         return _normalized_review_profile(value)
 
+    @field_validator("council_mode")
+    @classmethod
+    def mode_must_exist(cls, value: str) -> str:
+        return _normalized_council_mode(value)
+
+    @field_validator("role_assignments")
+    @classmethod
+    def roles_must_be_bounded(cls, value: Dict[str, str]) -> Dict[str, str]:
+        if len(value) > MAX_COUNCIL_MODELS:
+            raise ValueError("too many role assignments")
+        normalized: Dict[str, str] = {}
+        for model, role in value.items():
+            model_id = str(model).strip()
+            role_text = str(role).strip()
+            if not model_id or not role_text:
+                continue
+            if len(model_id) > 300 or len(role_text) > 160:
+                raise ValueError("role assignments exceed the allowed length")
+            normalized[model_id] = role_text
+        return normalized
+
 
 class RenameConversationRequest(BaseModel):
     title: str = Field(min_length=1, max_length=100)
@@ -114,12 +155,18 @@ class RenameConversationRequest(BaseModel):
 
 class RecommendModelsRequest(BaseModel):
     content: str = Field(min_length=1, max_length=MAX_PROMPT_CHARACTERS)
+    council_mode: str = "auto"
     review_profile: str = "general"
 
     @field_validator("review_profile")
     @classmethod
     def profile_must_exist(cls, value: str) -> str:
         return _normalized_review_profile(value)
+
+    @field_validator("council_mode")
+    @classmethod
+    def mode_must_exist(cls, value: str) -> str:
+        return _normalized_council_mode(value)
 
 
 class TestModelRequest(BaseModel):
@@ -142,6 +189,18 @@ class UsageEstimateRequest(BaseModel):
         max_length=MAX_DOCUMENTS_PER_MESSAGE,
     )
     include_context: bool = True
+    council_mode: str = "auto"
+    review_profile: str = "general"
+
+    @field_validator("council_mode")
+    @classmethod
+    def mode_must_exist(cls, value: str) -> str:
+        return _normalized_council_mode(value)
+
+    @field_validator("review_profile")
+    @classmethod
+    def profile_must_exist(cls, value: str) -> str:
+        return _normalized_review_profile(value)
 
 
 class ConversationMetadata(BaseModel):
@@ -213,6 +272,15 @@ async def _resolve_request_models(
             status_code=400,
             detail=f"Select no more than {MAX_COUNCIL_MODELS} council models.",
         )
+    unknown_role_models = sorted(set(request.role_assignments) - set(requested_models))
+    if unknown_role_models:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Role assignments must belong to selected council models: "
+                + ", ".join(unknown_role_models)
+            ),
+        )
 
     requested_chairman = (request.chairman_model or "").strip() or None
     active_chairman = requested_chairman or (
@@ -274,7 +342,9 @@ def _run_request_payload(
         "content": request.content,
         "models": models,
         "chairman_model": chairman_model,
+        "council_mode": request.council_mode,
         "review_profile": request.review_profile,
+        "role_assignments": dict(sorted(request.role_assignments.items())),
         "include_context": request.include_context,
         "document_ids": list(dict.fromkeys(request.document_ids)),
     }
@@ -405,7 +475,17 @@ async def _run_with_events(
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "LLM Council API", "version": "0.3.1"}
+    return {"status": "ok", "service": "LLM Council API", "version": "0.4.0"}
+
+
+@app.get("/api/council-modes")
+async def get_council_modes():
+    return {"modes": list_council_modes(), "default": "auto"}
+
+
+@app.get("/api/evaluations/catalog")
+async def get_evaluation_catalog():
+    return {"cases": list_evaluation_cases()}
 
 
 @app.get("/api/review-profiles")
@@ -509,6 +589,7 @@ async def recommend_models(request: RecommendModelsRequest):
     return await get_model_recommendations(
         request.content.strip(),
         request.review_profile,
+        council_mode=request.council_mode,
     )
 
 
@@ -618,11 +699,19 @@ async def usage_estimate(
         + sum(len(message["content"]) for message in history)
         + reviewed_document_characters
     )
+    resolved_mode = resolve_council_mode(
+        request.council_mode,
+        request.content,
+        review_profile=request.review_profile,
+    )
     return {
+        "requested_council_mode": request.council_mode,
+        "council_mode": resolved_mode.id,
         "model_count": model_count,
         "document_count": len(documents),
         "document_chunk_count": chunk_count,
         "chunked_review": chunked,
+        "chunked_document_processing": chunked,
         "estimated_calls": {
             "stage1": stage1_calls,
             "stage2": stage2_calls,
@@ -681,6 +770,8 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
             history,
             request.review_profile,
             documents,
+            council_mode=request.council_mode,
+            role_assignments=request.role_assignments,
         )
         await storage.add_assistant_message(
             conversation_id,
@@ -757,6 +848,17 @@ async def send_message_stream(
         chairman_model,
         documents,
     )
+    resolved_mode = resolve_council_mode(
+        request.council_mode,
+        request.content,
+        review_profile=request.review_profile,
+    )
+    assigned_roles = resolve_role_assignments(
+        models,
+        resolved_mode,
+        get_review_profile(request.review_profile),
+        request.role_assignments,
+    )
 
     async def event_generator():
         title_task: Optional[asyncio.Task] = None
@@ -766,7 +868,10 @@ async def send_message_stream(
         turn_metadata: Dict[str, Any] = {
             "models": models,
             "chairman_model": chairman_model,
+            "requested_council_mode": request.council_mode,
+            "council_mode": resolved_mode.id,
             "review_profile": request.review_profile,
+            "role_assignments": assigned_roles,
         }
         run_terminal = False
         try:
@@ -775,7 +880,10 @@ async def send_message_stream(
                 "resumed": run["resumed"],
                 "models": models,
                 "chairman_model": chairman_model,
+                "requested_council_mode": request.council_mode,
+                "council_mode": resolved_mode.id,
                 "review_profile": request.review_profile,
+                "role_assignments": assigned_roles,
                 "document_count": len(documents),
             })
             if needs_title:
@@ -788,11 +896,13 @@ async def send_message_stream(
             async for kind, value in _run_with_events(
                 lambda callback: stage1_collect_responses(
                     request.content,
-                    models,
-                    history,
-                    request.review_profile,
-                    documents,
-                    callback,
+                    models=models,
+                    history=history,
+                    review_profile=request.review_profile,
+                    documents=documents,
+                    event_callback=callback,
+                    council_mode=resolved_mode.id,
+                    role_assignments=assigned_roles,
                 )
             ):
                 if kind == "event":
@@ -826,10 +936,11 @@ async def send_message_stream(
                 lambda callback: stage2_collect_rankings(
                     request.content,
                     stage1_results,
-                    models,
-                    history,
-                    request.review_profile,
-                    callback,
+                    models=models,
+                    history=history,
+                    review_profile=request.review_profile,
+                    event_callback=callback,
+                    council_mode=resolved_mode.id,
                 )
             ):
                 if kind == "event":
@@ -851,7 +962,10 @@ async def send_message_stream(
                 "consensus_metrics": consensus_metrics,
                 "models": models,
                 "chairman_model": chairman_model,
+                "requested_council_mode": request.council_mode,
+                "council_mode": resolved_mode.id,
                 "review_profile": request.review_profile,
+                "role_assignments": assigned_roles,
                 "stage2_skipped": len(stage1_results) <= 1,
             }
             yield _sse(
@@ -867,10 +981,11 @@ async def send_message_stream(
                     request.content,
                     stage1_results,
                     stage2_results,
-                    chairman_model,
-                    history,
-                    request.review_profile,
-                    callback,
+                    chairman_model=chairman_model,
+                    history=history,
+                    review_profile=request.review_profile,
+                    event_callback=callback,
+                    council_mode=resolved_mode.id,
                 )
             ):
                 if kind == "event":

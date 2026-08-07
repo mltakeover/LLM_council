@@ -467,6 +467,72 @@
   line-height: 1.45;
 }
 
+.role-assignment-panel {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid rgba(142, 162, 190, 0.3);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.role-assignment-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--sidebar-heading, #edf4ff);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.role-assignment-heading button {
+  border: 0;
+  background: transparent;
+  color: #8db5ff;
+  cursor: pointer;
+  font-size: 0.7rem;
+}
+
+.role-assignment-heading button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.role-assignment-panel > small {
+  color: #91a0b6;
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.role-assignment-field {
+  display: grid;
+  gap: 4px;
+}
+
+.role-assignment-field span {
+  overflow: hidden;
+  color: #aebbd0;
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-assignment-field input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(150, 170, 201, 0.35);
+  border-radius: 7px;
+  background: rgba(11, 25, 46, 0.55);
+  color: #f5f8ff;
+  font-size: 0.73rem;
+  padding: 7px 8px;
+}
+
+.role-assignment-field input::placeholder {
+  color: #74839a;
+}
+
 .context-toggle {
   display: flex;
   align-items: flex-start;

@@ -40,7 +40,7 @@ export default function ConsensusPanel({ report, metrics }) {
                 </>
               ) : (
                 <>
-                  {metrics.top_choice_votes}/{metrics.valid_ranking_count} reviewers preferred{' '}
+                  {metrics.top_choice_votes}/{metrics.valid_ranking_count} council evaluators preferred{' '}
                   {shortModelName(metrics.top_choice_model) || 'the leading response'} ({percentage}%)
                 </>
               )}

@@ -5,13 +5,26 @@ import CouncilFlow from './components/CouncilFlow';
 import { api } from './api';
 import { shortModelName } from './utils/modelDisplay';
 import { createRunId } from './utils/runId';
+import { normalizeRoleAssignments } from './utils/councilMode';
 import './App.css';
 
 
 const SELECTED_MODELS_KEY = 'llm-council:selected-models';
 const CHAIRMAN_MODEL_KEY = 'llm-council:chairman-model';
+const COUNCIL_MODE_KEY = 'llm-council:council-mode';
 const REVIEW_PROFILE_KEY = 'llm-council:review-profile';
 const INCLUDE_CONTEXT_KEY = 'llm-council:include-context';
+const ROLE_ASSIGNMENTS_KEY = 'llm-council:role-assignments';
+
+
+function readRoleAssignments() {
+  try {
+    const value = JSON.parse(localStorage.getItem(ROLE_ASSIGNMENTS_KEY) || '{}');
+    return normalizeRoleAssignments(value);
+  } catch {
+    return {};
+  }
+}
 
 
 function createProgress(models, chairmanModel, phase = 'ready') {
@@ -53,12 +66,17 @@ function App() {
   const [maxCouncilModels, setMaxCouncilModels] = useState(8);
   const [titleModel, setTitleModel] = useState(null);
   const [reviewProfiles, setReviewProfiles] = useState([]);
+  const [councilModes, setCouncilModes] = useState([]);
+  const [councilMode, setCouncilMode] = useState(
+    localStorage.getItem(COUNCIL_MODE_KEY) || 'auto'
+  );
   const [reviewProfile, setReviewProfile] = useState(
     localStorage.getItem(REVIEW_PROFILE_KEY) || 'general'
   );
   const [includeContext, setIncludeContext] = useState(
     localStorage.getItem(INCLUDE_CONTEXT_KEY) !== 'false'
   );
+  const [roleAssignments, setRoleAssignments] = useState(readRoleAssignments);
   const [cloudPrivacyConfirmed, setCloudPrivacyConfirmed] = useState(false);
   const [councilProgress, setCouncilProgress] = useState(
     createProgress([], null)
@@ -71,6 +89,7 @@ function App() {
   useEffect(() => {
     loadConversations();
     loadModels();
+    loadCouncilModes();
     loadReviewProfiles();
     // Bootstrap once; refresh actions call the same loaders explicitly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,6 +123,29 @@ function App() {
       console.error('Failed to load review profiles:', error);
       setReviewProfiles([
         { id: 'general', name: 'General review', description: 'Balanced review across quality, risk, and implementation.' },
+      ]);
+    }
+  };
+
+  const loadCouncilModes = async () => {
+    try {
+      const payload = await api.getCouncilModes();
+      const modes = payload.modes || [];
+      setCouncilModes(modes);
+      if (!modes.some((mode) => mode.id === councilMode)) {
+        const fallback = payload.default || modes[0]?.id || 'auto';
+        setCouncilMode(fallback);
+        localStorage.setItem(COUNCIL_MODE_KEY, fallback);
+      }
+    } catch (error) {
+      console.error('Failed to load council modes:', error);
+      setCouncilModes([
+        {
+          id: 'auto',
+          name: 'Auto',
+          description: 'Choose the most suitable approach for the request.',
+          default_roles: [],
+        },
       ]);
     }
   };
@@ -160,6 +202,13 @@ function App() {
       setSelectedModels(finalModels);
       setChairmanModel(nextChairman);
       setCouncilProgress(createProgress(finalModels, nextChairman));
+      setRoleAssignments((previous) => {
+        const next = Object.fromEntries(
+          Object.entries(previous).filter(([model]) => finalModels.includes(model))
+        );
+        localStorage.setItem(ROLE_ASSIGNMENTS_KEY, JSON.stringify(next));
+        return next;
+      });
 
       localStorage.setItem(
         SELECTED_MODELS_KEY,
@@ -303,6 +352,13 @@ function App() {
       }
 
       localStorage.setItem(SELECTED_MODELS_KEY, JSON.stringify(next));
+      setRoleAssignments((assignments) => {
+        const filtered = Object.fromEntries(
+          Object.entries(assignments).filter(([model]) => next.includes(model))
+        );
+        localStorage.setItem(ROLE_ASSIGNMENTS_KEY, JSON.stringify(filtered));
+        return filtered;
+      });
       setModelError(null);
       setCouncilProgress(createProgress(next, nextChairman));
       return next;
@@ -321,6 +377,35 @@ function App() {
     if (isLoading) return;
     setReviewProfile(profileId);
     localStorage.setItem(REVIEW_PROFILE_KEY, profileId);
+  };
+
+  const handleCouncilModeChange = (modeId) => {
+    if (isLoading) return;
+    setCouncilMode(modeId);
+    setRoleAssignments({});
+    localStorage.setItem(COUNCIL_MODE_KEY, modeId);
+    localStorage.setItem(ROLE_ASSIGNMENTS_KEY, '{}');
+  };
+
+  const handleRoleAssignmentChange = (modelId, role) => {
+    if (isLoading || !selectedModels.includes(modelId)) return;
+    setRoleAssignments((previous) => {
+      const next = { ...previous };
+      const trimmed = role.trim();
+      if (trimmed) {
+        next[modelId] = role.slice(0, 160);
+      } else {
+        delete next[modelId];
+      }
+      localStorage.setItem(ROLE_ASSIGNMENTS_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const handleResetRoles = () => {
+    if (isLoading) return;
+    setRoleAssignments({});
+    localStorage.setItem(ROLE_ASSIGNMENTS_KEY, '{}');
   };
 
   const handleIncludeContextChange = (enabled) => {
@@ -349,11 +434,21 @@ function App() {
     const nextProfile = reviewProfiles.some((profile) => profile.id === preset.reviewProfile)
       ? preset.reviewProfile
       : 'general';
+    const nextMode = councilModes.some((mode) => mode.id === preset.councilMode)
+      ? preset.councilMode
+      : 'auto';
     const nextContext = preset.includeContext !== false;
+    const nextRoles = Object.fromEntries(
+      Object.entries(preset.roleAssignments || {}).filter(([model]) => (
+        nextModels.includes(model)
+      ))
+    );
 
     setSelectedModels(nextModels);
     setChairmanModel(nextChairman);
+    setCouncilMode(nextMode);
     setReviewProfile(nextProfile);
+    setRoleAssignments(nextRoles);
     setIncludeContext(nextContext);
     setCloudPrivacyConfirmed(false);
     setModelError(null);
@@ -361,7 +456,9 @@ function App() {
 
     localStorage.setItem(SELECTED_MODELS_KEY, JSON.stringify(nextModels));
     localStorage.setItem(CHAIRMAN_MODEL_KEY, nextChairman);
+    localStorage.setItem(COUNCIL_MODE_KEY, nextMode);
     localStorage.setItem(REVIEW_PROFILE_KEY, nextProfile);
+    localStorage.setItem(ROLE_ASSIGNMENTS_KEY, JSON.stringify(nextRoles));
     localStorage.setItem(INCLUDE_CONTEXT_KEY, String(nextContext));
   };
 
@@ -434,6 +531,7 @@ function App() {
     content,
     selectedDocuments = [],
     existingRunId = null,
+    existingSettings = null,
   ) => {
     if (
       !currentConversationId
@@ -441,8 +539,28 @@ function App() {
       || selectedModels.length === 0
     ) return;
 
-    const activeModels = [...selectedModels];
-    const activeChairman = chairmanModel || activeModels[0];
+    const activeModels = [...(existingSettings?.models || selectedModels)];
+    const activeChairman = (
+      existingSettings?.chairmanModel || chairmanModel || activeModels[0]
+    );
+    const activeCouncilMode = existingSettings?.councilMode || councilMode;
+    const activeReviewProfile = existingSettings?.reviewProfile || reviewProfile;
+    const activeIncludeContext = existingSettings?.includeContext ?? includeContext;
+    const activeCloudProcessingConfirmed = (
+      existingSettings?.cloudProcessingConfirmed ?? cloudPrivacyConfirmed
+    );
+    const activeRoleAssignments = existingSettings?.roleAssignments || Object.fromEntries(
+      Object.entries(roleAssignments).filter(([model]) => activeModels.includes(model))
+    );
+    const activeSettings = {
+      models: activeModels,
+      chairmanModel: activeChairman,
+      councilMode: activeCouncilMode,
+      reviewProfile: activeReviewProfile,
+      includeContext: activeIncludeContext,
+      roleAssignments: activeRoleAssignments,
+      cloudProcessingConfirmed: activeCloudProcessingConfirmed,
+    };
     const runId = existingRunId || createRunId();
 
     const controller = new AbortController();
@@ -461,6 +579,7 @@ function App() {
       run_id: runId,
       content,
       documents: selectedDocuments,
+      council_mode: activeCouncilMode,
     };
     const assistantMessage = {
       role: 'assistant',
@@ -511,10 +630,12 @@ function App() {
           runId,
           models: activeModels,
           chairmanModel: activeChairman,
-          reviewProfile,
-          includeContext,
+          councilMode: activeCouncilMode,
+          reviewProfile: activeReviewProfile,
+          roleAssignments: activeRoleAssignments,
+          includeContext: activeIncludeContext,
           documentIds,
-          cloudProcessingConfirmed: cloudPrivacyConfirmed,
+          cloudProcessingConfirmed: activeCloudProcessingConfirmed,
           signal: controller.signal,
         },
         (eventType, event) => {
@@ -697,7 +818,12 @@ function App() {
                 },
               }));
               setModelError(streamError.message);
-              setLastFailedRequest({ content, selectedDocuments, runId });
+              setLastFailedRequest({
+                content,
+                selectedDocuments,
+                runId,
+                settings: activeSettings,
+              });
               setIsLoading(false);
               break;
             }
@@ -756,7 +882,12 @@ function App() {
         }));
         setModelError(error.message);
       }
-      setLastFailedRequest({ content, selectedDocuments, runId });
+      setLastFailedRequest({
+        content,
+        selectedDocuments,
+        runId,
+        settings: activeSettings,
+      });
       setIsLoading(false);
     } finally {
       abortControllerRef.current = null;
@@ -775,6 +906,7 @@ function App() {
         request.content,
         request.selectedDocuments,
         request.runId,
+        request.settings,
       );
     }
   };
@@ -827,12 +959,18 @@ function App() {
         availableModels={availableModels}
         selectedModels={selectedModels}
         chairmanModel={chairmanModel}
+        councilModes={councilModes}
+        councilMode={councilMode}
         reviewProfiles={reviewProfiles}
         reviewProfile={reviewProfile}
+        roleAssignments={roleAssignments}
         includeContext={includeContext}
         onToggleModel={handleToggleModel}
         onChairmanChange={handleChairmanChange}
+        onCouncilModeChange={handleCouncilModeChange}
         onReviewProfileChange={handleReviewProfileChange}
+        onRoleAssignmentChange={handleRoleAssignmentChange}
+        onResetRoles={handleResetRoles}
         onIncludeContextChange={handleIncludeContextChange}
         onApplyPreset={handleApplyPreset}
         onRefreshModels={loadModels}
@@ -855,6 +993,7 @@ function App() {
           onApplyRecommendation={handleApplyRecommendation}
           selectedModels={selectedModels}
           chairmanModel={chairmanModel}
+          councilMode={councilMode}
           reviewProfile={reviewProfile}
           reviewProfiles={reviewProfiles}
           includeContext={includeContext}

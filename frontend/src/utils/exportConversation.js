@@ -102,7 +102,7 @@ export async function downloadConversationDocx(conversation) {
   const documentFile = new Document({
     creator: 'LLM Council',
     title: conversation.title || 'LLM Council Conversation',
-    description: 'Exported multi-model council review',
+    description: 'Exported multi-model council conversation',
     sections: [{
       properties: {},
       children: lines.map((line) => docxParagraph(line, docx)),

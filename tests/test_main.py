@@ -105,14 +105,9 @@ def test_stream_stops_when_every_model_fails(tmp_path, monkeypatch) -> None:
         assert isinstance(include_title, bool)
         return ["ollama:test"], "ollama:test"
 
-    async def no_responses(
-        _content,
-        _models,
-        _history,
-        _profile,
-        _documents,
-        event_callback,
-    ):
+    async def no_responses(_content, **kwargs):
+        event_callback = kwargs["event_callback"]
+        assert kwargs["council_mode"] == "review"
         await event_callback({
             "type": "model_failed",
             "data": {
@@ -155,6 +150,41 @@ def test_stream_stops_when_every_model_fails(tmp_path, monkeypatch) -> None:
             "user",
             "assistant",
         ]
+
+
+def test_general_purpose_catalog_endpoints() -> None:
+    with TestClient(main.app) as client:
+        modes = client.get("/api/council-modes")
+        evaluations = client.get("/api/evaluations/catalog")
+
+    assert modes.status_code == 200
+    assert modes.json()["default"] == "auto"
+    assert {mode["id"] for mode in modes.json()["modes"]} >= {
+        "ask",
+        "review",
+        "debate",
+        "decide",
+        "brainstorm",
+        "compare",
+        "plan",
+        "summarize",
+        "fact_check",
+    }
+    assert len(evaluations.json()["cases"]) == 9
+
+
+def test_send_request_validates_modes_and_role_bounds() -> None:
+    with pytest.raises(ValueError):
+        main.SendMessageRequest(content="Question", council_mode="unknown")
+
+    request = main.SendMessageRequest(
+        content="Question",
+        council_mode="debate",
+        role_assignments={"ollama:a": "  Evidence advocate  ", "ollama:b": ""},
+    )
+
+    assert request.council_mode == "debate"
+    assert request.role_assignments == {"ollama:a": "Evidence advocate"}
 
 
 def test_document_upload_and_usage_estimate(tmp_path) -> None:

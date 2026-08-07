@@ -51,6 +51,24 @@
   letter-spacing: 0.5px;
 }
 
+.active-mode-badge,
+.message-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: #e8efff;
+  color: #244b91;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 5px 9px;
+  text-transform: uppercase;
+}
+
+.message-mode-badge {
+  margin-top: 10px;
+}
+
 .user-message .message-content {
   background: var(--color-primary-50);
   padding: 16px;
@@ -278,6 +296,14 @@
   min-height: 28px;
   justify-content: space-between;
   gap: 12px;
+}
+
+.active-mode-badge {
+  flex: 0 0 auto;
+}
+
+.message-mode-badge {
+  margin-top: 10px;
 }
 
 .file-upload-button {

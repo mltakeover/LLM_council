@@ -45,3 +45,21 @@
   line-height: 1.7;
   font-size: 15px;
 }
+
+.full-report-details {
+  margin-top: 16px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 12px;
+}
+
+.full-report-details summary {
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.full-report-details[open] summary {
+  margin-bottom: 12px;
+}
