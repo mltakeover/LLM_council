@@ -171,6 +171,9 @@ export default function ChatInterface({
   const selectedDocuments = documents.filter((document) => (
     selectedDocumentIds.includes(document.id)
   ));
+  const truncatedSelectedDocuments = selectedDocuments.filter(
+    (document) => document.truncated
+  );
   const privacyReady = !requiresCloudConfirmation || cloudPrivacyConfirmed;
 
   const handleDocumentUpload = async (event) => {
@@ -184,19 +187,25 @@ export default function ChatInterface({
 
     setUploading(true);
     setDocumentError(null);
+    const uploaded = [];
     try {
-      const uploaded = [];
       for (const file of files) {
         uploaded.push(await api.uploadDocument(conversation.id, file));
       }
-      setDocuments((previous) => [...previous, ...uploaded]);
-      setSelectedDocumentIds((previous) => [
-        ...previous,
-        ...uploaded.map((document) => document.id),
-      ]);
     } catch (error) {
-      setDocumentError(error.message);
+      setDocumentError(
+        uploaded.length > 0
+          ? `${error.message} ${uploaded.length} earlier file(s) were uploaded successfully.`
+          : error.message
+      );
     } finally {
+      if (uploaded.length > 0) {
+        setDocuments((previous) => [...previous, ...uploaded]);
+        setSelectedDocumentIds((previous) => [
+          ...previous,
+          ...uploaded.map((document) => document.id),
+        ]);
+      }
       setUploading(false);
     }
   };
@@ -315,7 +324,15 @@ export default function ChatInterface({
                       {msg.documents?.length > 0 && (
                         <div className="message-documents">
                           {msg.documents.map((document) => (
-                            <span key={document.id}>▤ {document.filename}</span>
+                            <span
+                              key={document.id}
+                              className={document.truncated ? 'truncated' : ''}
+                              title={document.truncated
+                                ? 'This review used only the stored document chunks.'
+                                : undefined}
+                            >
+                              {document.truncated ? '⚠' : '▤'} {document.filename}
+                            </span>
                           ))}
                         </div>
                       )}
@@ -443,8 +460,9 @@ export default function ChatInterface({
           />
           <span>
             <strong>Confirm cloud processing</strong>
-            This review will send the prompt and selected documents to{' '}
-            {cloudModelNames.join(', ')}. Your provider account settings govern retention and training.
+            Cloud processing may send the prompt and selected documents to council models.
+            A cloud title model receives the prompt only. Destinations: {' '}
+            {cloudModelNames.join(', ')}. Provider account settings govern retention and training.
           </span>
         </label>
       )}
@@ -466,6 +484,9 @@ export default function ChatInterface({
               ≈ {usageEstimate.estimated_source_tokens.toLocaleString()} input tokens ·{' '}
               {usageEstimate.estimated_calls.total} model calls
               {usageEstimate.chunked_review ? ' · chunked review' : ''}
+              {usageEstimate.truncated_document_count > 0
+                ? ` · ⚠ ${usageEstimate.truncated_document_count} truncated`
+                : ''}
             </span>
           )}
         </div>
@@ -475,14 +496,21 @@ export default function ChatInterface({
             {documents.map((document) => {
               const selected = selectedDocumentIds.includes(document.id);
               return (
-                <span className={`document-chip ${selected ? 'selected' : ''}`} key={document.id}>
+                <span
+                  className={`document-chip ${selected ? 'selected' : ''} ${
+                    document.truncated ? 'truncated' : ''
+                  }`}
+                  key={document.id}
+                >
                   <button
                     type="button"
                     onClick={() => toggleDocument(document.id)}
                     disabled={isLoading}
-                    title={`${document.character_count.toLocaleString()} characters · ${document.chunk_count} chunks`}
+                    title={`${document.character_count.toLocaleString()} characters · ${document.chunk_count} chunks${
+                      document.truncated ? ' · truncated to the configured review limit' : ''
+                    }`}
                   >
-                    {selected ? '✓' : '○'} {document.filename}
+                    {selected ? '✓' : '○'} {document.truncated ? '⚠ ' : ''}{document.filename}
                   </button>
                   <button
                     type="button"
@@ -496,6 +524,14 @@ export default function ChatInterface({
                 </span>
               );
             })}
+          </div>
+        )}
+        {truncatedSelectedDocuments.length > 0 && (
+          <div className="document-truncation-warning" role="status">
+            ⚠ {truncatedSelectedDocuments.length === 1
+              ? truncatedSelectedDocuments[0].filename
+              : `${truncatedSelectedDocuments.length} selected documents`}{' '}
+            exceeds the configured review limit. Only the stored chunks will be reviewed.
           </div>
         )}
         {documentError && <div className="document-error" role="alert">{documentError}</div>}

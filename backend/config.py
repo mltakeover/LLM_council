@@ -1,6 +1,8 @@
 """Configuration for LLM Council using cloud providers and local Ollama models."""
 
+import ipaddress
 import os
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -38,6 +40,18 @@ def _is_configured_api_key(value: str | None) -> bool:
         and not normalized.startswith("your-")
         and not normalized.startswith("<your-")
     )
+
+
+def _is_loopback_url(value: str) -> bool:
+    """Return True only for explicit localhost or loopback-IP endpoints."""
+
+    hostname = (urlsplit(value).hostname or "").strip().lower()
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 DATA_DIR = os.getenv("DATA_DIR", "data/conversations")
@@ -82,6 +96,7 @@ OLLAMA_BASE_URL = os.getenv(
     "OLLAMA_BASE_URL",
     "http://127.0.0.1:11434/v1/",
 ).strip()
+OLLAMA_ENDPOINT_IS_LOCAL = _is_loopback_url(OLLAMA_BASE_URL)
 
 OLLAMA_DISCOVERY_TIMEOUT = float(
     os.getenv("OLLAMA_DISCOVERY_TIMEOUT", "5")
@@ -315,3 +330,9 @@ if (
         "Missing or placeholder API key for TITLE_MODEL provider: "
         f"{title_provider}"
     )
+
+TITLE_MODEL_IS_LOCAL = (
+    title_provider == "ollama"
+    and OLLAMA_ENDPOINT_IS_LOCAL
+    and not title_model_name.strip().endswith("-cloud")
+)

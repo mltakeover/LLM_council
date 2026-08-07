@@ -22,6 +22,9 @@ from .config import (
     MAX_COUNCIL_MODELS,
     MAX_DOCUMENTS_PER_MESSAGE,
     MAX_PROMPT_CHARACTERS,
+    OLLAMA_ENDPOINT_IS_LOCAL,
+    TITLE_MODEL,
+    TITLE_MODEL_IS_LOCAL,
     UPLOAD_MAX_BYTES,
 )
 from .council import (
@@ -47,7 +50,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="LLM Council API", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="LLM Council API", version="0.3.1", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -71,6 +74,7 @@ def _normalized_review_profile(value: str) -> str:
 
 
 class SendMessageRequest(BaseModel):
+    run_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     content: str = Field(min_length=1, max_length=MAX_PROMPT_CHARACTERS)
     models: Optional[List[str]] = None
     chairman_model: Optional[str] = None
@@ -89,6 +93,14 @@ class SendMessageRequest(BaseModel):
         if not stripped:
             raise ValueError("content cannot be blank")
         return stripped
+
+    @field_validator("run_id")
+    @classmethod
+    def run_id_must_be_uuid(cls, value: str) -> str:
+        try:
+            return str(uuid.UUID(value))
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise ValueError("run_id must be a UUID") from exc
 
     @field_validator("review_profile")
     @classmethod
@@ -148,11 +160,14 @@ class Conversation(BaseModel):
 
 def _history_from_conversation(
     conversation: Dict[str, Any],
+    exclude_run_id: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """Return the newest complete turns within the configured context bound."""
 
     history: List[Dict[str, str]] = []
     for message in conversation.get("messages", []):
+        if exclude_run_id and message.get("run_id") == exclude_run_id:
+            continue
         if message.get("role") == "user":
             content = message.get("content", "")
             if content:
@@ -186,6 +201,7 @@ def _unique_models(models: List[str]) -> List[str]:
 
 async def _resolve_request_models(
     request: SendMessageRequest,
+    include_title: bool = False,
 ) -> Tuple[List[str], str]:
     requested_models = _unique_models(
         request.models if request.models is not None else list(COUNCIL_MODELS)
@@ -208,38 +224,121 @@ async def _resolve_request_models(
             detail="The chairman must be one of the selected council models.",
         )
 
-    cloud_models = [
-        model for model in requested_models if not model.startswith("ollama:")
-    ]
-    if cloud_models and not request.cloud_processing_confirmed:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Confirm cloud processing before sending content to: "
-                + ", ".join(cloud_models)
-            ),
-        )
-
-    allowed_models = set(AVAILABLE_CLOUD_MODELS)
-    if any(model.startswith("ollama:") for model in requested_models):
-        try:
-            ollama_models = await list_ollama_models()
-        except Exception as exc:
+    catalog = await get_models()
+    available_models = {
+        model["id"]: model
+        for model in catalog["models"]
+        if model.get("selectable")
+    }
+    invalid_models = [model for model in requested_models if model not in available_models]
+    if invalid_models:
+        if (
+            catalog.get("ollama_online") is False
+            and any(model.startswith("ollama:") for model in invalid_models)
+        ):
             raise HTTPException(
                 status_code=503,
                 detail="Ollama is unavailable. Confirm that Ollama is running.",
-            ) from exc
-        allowed_models.update(
-            model["id"] for model in ollama_models if model["selectable"]
-        )
-
-    invalid_models = [model for model in requested_models if model not in allowed_models]
-    if invalid_models:
+            )
         raise HTTPException(
             status_code=400,
             detail="Unavailable model selection: " + ", ".join(invalid_models),
         )
+
+    cloud_destinations = [
+        model
+        for model in requested_models
+        if not available_models[model].get("is_local")
+    ]
+    if include_title and not TITLE_MODEL_IS_LOCAL:
+        cloud_destinations.append(f"{TITLE_MODEL} (conversation title)")
+    if cloud_destinations and not request.cloud_processing_confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Confirm cloud processing before sending content to: "
+                + ", ".join(cloud_destinations)
+            ),
+        )
     return requested_models, active_chairman
+
+
+def _run_request_payload(
+    request: SendMessageRequest,
+    models: List[str],
+    chairman_model: str,
+) -> Dict[str, Any]:
+    """Canonical run inputs used to make retries idempotent."""
+
+    return {
+        "content": request.content,
+        "models": models,
+        "chairman_model": chairman_model,
+        "review_profile": request.review_profile,
+        "include_context": request.include_context,
+        "document_ids": list(dict.fromkeys(request.document_ids)),
+    }
+
+
+async def _begin_run_or_http_error(
+    conversation_id: str,
+    request: SendMessageRequest,
+    models: List[str],
+    chairman_model: str,
+    documents: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    try:
+        return await storage.begin_run(
+            conversation_id,
+            request.run_id,
+            _run_request_payload(request, models, chairman_model),
+            documents,
+        )
+    except storage.RunConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except storage.RunInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except storage.RunAlreadyCompletedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _failure_stage3(
+    error: Dict[str, Any],
+    model: str = "error",
+) -> Dict[str, Any]:
+    return {
+        "model": model,
+        "response": error["message"],
+        "success": False,
+        "error": error,
+    }
+
+
+async def _persist_failed_run(
+    conversation_id: str,
+    run_id: str,
+    error: Dict[str, Any],
+    stage1: Optional[List[Dict[str, Any]]] = None,
+    stage2: Optional[List[Dict[str, Any]]] = None,
+    stage3: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    status: str = "failed",
+) -> None:
+    terminal_stage3 = stage3 or _failure_stage3(error)
+    await storage.add_assistant_message(
+        conversation_id,
+        stage1 or [],
+        stage2 or [],
+        terminal_stage3,
+        metadata,
+        run_id=run_id,
+    )
+    await storage.set_run_status(
+        conversation_id,
+        run_id,
+        status,
+        error,
+    )
 
 
 async def _request_documents(
@@ -290,14 +389,23 @@ async def _run_with_events(
         await queue.put(event)
 
     task = asyncio.create_task(coroutine_factory(callback))
-    async for event in _drain_provider_events(task, queue):
-        yield "event", event
-    yield "result", await task
+    try:
+        async for event in _drain_provider_events(task, queue):
+            yield "event", event
+        yield "result", await task
+    finally:
+        # Closing an SSE response must stop the underlying provider work too.
+        # Without this cleanup, browser cancellation only stopped rendering
+        # while Ollama/cloud requests continued in the background.
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "LLM Council API", "version": "0.3.0"}
+    return {"status": "ok", "service": "LLM Council API", "version": "0.3.1"}
 
 
 @app.get("/api/review-profiles")
@@ -348,6 +456,12 @@ async def get_models():
         "models": all_models,
         "default_models": default_models,
         "default_chairman_model": default_chairman,
+        "title_model": {
+            "id": TITLE_MODEL,
+            "is_local": TITLE_MODEL_IS_LOCAL,
+            "requires_cloud_confirmation": not TITLE_MODEL_IS_LOCAL,
+        },
+        "ollama_endpoint_is_local": OLLAMA_ENDPOINT_IS_LOCAL,
         "ollama_online": ollama_online,
         "ollama_error": ollama_error,
         "limits": {
@@ -414,6 +528,14 @@ async def get_conversation(conversation_id: str):
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
+
+
+@app.get("/api/conversations/{conversation_id}/runs/{run_id}")
+async def get_run(conversation_id: str, run_id: str):
+    run = await storage.get_run(conversation_id, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
 
 
 @app.delete("/api/conversations/{conversation_id}")
@@ -483,11 +605,18 @@ async def usage_estimate(
     stage1_calls = model_count * ((chunk_count + 1) if chunked else 1)
     stage2_calls = model_count if model_count > 1 else 0
     stage3_calls = 1 if model_count else 0
-    title_calls = 1 if not conversation.get("messages") else 0
+    title_calls = 1 if conversation.get("title") == "New Conversation" else 0
+    reviewed_document_characters = sum(
+        sum(len(chunk) for chunk in document.get("chunks") or [])
+        for document in documents
+    )
+    original_document_characters = sum(
+        document["character_count"] for document in documents
+    )
     source_characters = (
         len(request.content)
         + sum(len(message["content"]) for message in history)
-        + sum(document["character_count"] for document in documents)
+        + reviewed_document_characters
     )
     return {
         "model_count": model_count,
@@ -502,10 +631,16 @@ async def usage_estimate(
             "total": stage1_calls + stage2_calls + stage3_calls + title_calls,
         },
         "source_characters": source_characters,
+        "reviewed_document_characters": reviewed_document_characters,
+        "original_document_characters": original_document_characters,
+        "truncated_document_count": sum(
+            bool(document.get("truncated")) for document in documents
+        ),
         "estimated_source_tokens": max(1, (source_characters + 3) // 4),
         "caveat": (
-            "Token count is a character-based approximation and excludes "
-            "generated answers, chunk notes, rankings and provider tokenisation."
+            "Token count uses the document chunks that will actually be sent, "
+            "is a character-based approximation, and excludes generated answers, "
+            "chunk notes, rankings and provider tokenisation."
         ),
     }
 
@@ -515,28 +650,85 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
     conversation = await storage.get_conversation(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    models, chairman_model = await _resolve_request_models(request)
+    needs_title = conversation.get("title") == "New Conversation"
+    models, chairman_model = await _resolve_request_models(
+        request,
+        include_title=needs_title,
+    )
     documents = await _request_documents(conversation_id, request.document_ids)
-    history = _history_from_conversation(conversation) if request.include_context else []
-    is_first_message = len(conversation["messages"]) == 0
-    await storage.add_user_message(conversation_id, request.content, documents)
-    if is_first_message:
-        await storage.update_conversation_title(
-            conversation_id,
-            await generate_conversation_title(request.content),
-        )
-    stage1, stage2, stage3, metadata = await run_full_council(
-        request.content,
+    history = (
+        _history_from_conversation(conversation, request.run_id)
+        if request.include_context
+        else []
+    )
+    await _begin_run_or_http_error(
+        conversation_id,
+        request,
         models,
         chairman_model,
-        history,
-        request.review_profile,
         documents,
     )
-    await storage.add_assistant_message(
-        conversation_id, stage1, stage2, stage3, metadata
-    )
-    return {"stage1": stage1, "stage2": stage2, "stage3": stage3, "metadata": metadata}
+    try:
+        if needs_title:
+            await storage.update_conversation_title(
+                conversation_id,
+                await generate_conversation_title(request.content),
+            )
+        stage1, stage2, stage3, metadata = await run_full_council(
+            request.content,
+            models,
+            chairman_model,
+            history,
+            request.review_profile,
+            documents,
+        )
+        await storage.add_assistant_message(
+            conversation_id,
+            stage1,
+            stage2,
+            stage3,
+            metadata,
+            run_id=request.run_id,
+        )
+        run_status = "completed" if stage3.get("success") is not False else "failed"
+        await storage.set_run_status(
+            conversation_id,
+            request.run_id,
+            run_status,
+            stage3.get("error"),
+        )
+        return {
+            "run_id": request.run_id,
+            "stage1": stage1,
+            "stage2": stage2,
+            "stage3": stage3,
+            "metadata": metadata,
+        }
+    except asyncio.CancelledError:
+        cancelled = {
+            "code": "cancelled",
+            "message": "Council request cancelled.",
+            "retryable": True,
+        }
+        await asyncio.shield(_persist_failed_run(
+            conversation_id,
+            request.run_id,
+            cancelled,
+            status="cancelled",
+        ))
+        raise
+    except Exception:
+        failure = {
+            "code": "internal_error",
+            "message": "The council stopped because of an internal error.",
+            "retryable": True,
+        }
+        await asyncio.shield(_persist_failed_run(
+            conversation_id,
+            request.run_id,
+            failure,
+        ))
+        raise
 
 
 @app.post("/api/conversations/{conversation_id}/message/stream")
@@ -547,32 +739,52 @@ async def send_message_stream(
     conversation = await storage.get_conversation(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    models, chairman_model = await _resolve_request_models(request)
+    needs_title = conversation.get("title") == "New Conversation"
+    models, chairman_model = await _resolve_request_models(
+        request,
+        include_title=needs_title,
+    )
     documents = await _request_documents(conversation_id, request.document_ids)
-    history = _history_from_conversation(conversation) if request.include_context else []
-    is_first_message = len(conversation["messages"]) == 0
+    history = (
+        _history_from_conversation(conversation, request.run_id)
+        if request.include_context
+        else []
+    )
+    run = await _begin_run_or_http_error(
+        conversation_id,
+        request,
+        models,
+        chairman_model,
+        documents,
+    )
 
     async def event_generator():
         title_task: Optional[asyncio.Task] = None
+        stage1_results: List[Dict[str, Any]] = []
+        stage2_results: List[Dict[str, Any]] = []
+        stage3_result: Optional[Dict[str, Any]] = None
+        turn_metadata: Dict[str, Any] = {
+            "models": models,
+            "chairman_model": chairman_model,
+            "review_profile": request.review_profile,
+        }
+        run_terminal = False
         try:
-            await storage.add_user_message(
-                conversation_id,
-                request.content,
-                documents,
-            )
             yield _sse("council_start", {
+                "run_id": request.run_id,
+                "resumed": run["resumed"],
                 "models": models,
                 "chairman_model": chairman_model,
                 "review_profile": request.review_profile,
                 "document_count": len(documents),
             })
-            if is_first_message:
+            if needs_title:
                 title_task = asyncio.create_task(
                     generate_conversation_title(request.content)
                 )
 
             yield _sse("stage1_start", {"models": models})
-            stage1_results = None
+            collected_stage1 = None
             async for kind, value in _run_with_events(
                 lambda callback: stage1_collect_responses(
                     request.content,
@@ -586,8 +798,8 @@ async def send_message_stream(
                 if kind == "event":
                     yield _sse(value["type"], value.get("data") or {})
                 else:
-                    stage1_results = value
-            stage1_results = stage1_results or []
+                    collected_stage1 = value
+            stage1_results = collected_stage1 or []
             yield _sse("stage1_complete", stage1_results)
 
             if not stage1_results:
@@ -596,23 +808,16 @@ async def send_message_stream(
                     "message": "All selected models failed during the answer stage.",
                     "retryable": True,
                 }
-                await storage.add_assistant_message(
+                stage3_result = _failure_stage3(failure)
+                await _persist_failed_run(
                     conversation_id,
-                    [],
-                    [],
-                    {
-                        "model": "error",
-                        "response": failure["message"],
-                        "success": False,
-                        "error": failure,
-                    },
-                    {
-                        "models": models,
-                        "chairman_model": chairman_model,
-                        "review_profile": request.review_profile,
-                    },
+                    request.run_id,
+                    failure,
+                    stage3=stage3_result,
+                    metadata=turn_metadata,
                 )
-                yield _sse("error", error=failure)
+                run_terminal = True
+                yield _sse("error", error=failure, run_id=request.run_id)
                 return
 
             yield _sse("stage2_start", {"models": models})
@@ -656,7 +861,7 @@ async def send_message_stream(
             )
 
             yield _sse("stage3_start", {"chairman_model": chairman_model})
-            stage3_result = None
+            collected_stage3 = None
             async for kind, value in _run_with_events(
                 lambda callback: stage3_synthesize_final(
                     request.content,
@@ -671,13 +876,13 @@ async def send_message_stream(
                 if kind == "event":
                     yield _sse(value["type"], value.get("data") or {})
                 else:
-                    stage3_result = value
+                    collected_stage3 = value
+            stage3_result = collected_stage3 or _failure_stage3({
+                "code": "empty_synthesis",
+                "message": "The Chairman did not return a final synthesis.",
+                "retryable": True,
+            })
             yield _sse("stage3_complete", stage3_result)
-
-            if title_task:
-                title = await title_task
-                await storage.update_conversation_title(conversation_id, title)
-                yield _sse("title_complete", {"title": title})
 
             await storage.add_assistant_message(
                 conversation_id,
@@ -685,25 +890,89 @@ async def send_message_stream(
                 stage2_results,
                 stage3_result,
                 turn_metadata,
+                run_id=request.run_id,
             )
+            if stage3_result.get("success") is False:
+                stage3_error = stage3_result.get("error") or {
+                    "code": "synthesis_failed",
+                    "message": "The Chairman failed to produce a final synthesis.",
+                    "retryable": True,
+                }
+                await storage.set_run_status(
+                    conversation_id,
+                    request.run_id,
+                    "failed",
+                    stage3_error,
+                )
+                run_terminal = True
+                yield _sse("error", error=stage3_error, run_id=request.run_id)
+                return
+
+            await storage.set_run_status(
+                conversation_id,
+                request.run_id,
+                "completed",
+            )
+            run_terminal = True
+
+            if title_task:
+                try:
+                    title = await title_task
+                    await storage.update_conversation_title(conversation_id, title)
+                    yield _sse("title_complete", {"title": title})
+                except Exception:
+                    logger.exception(
+                        "Conversation title update failed conversation=%s",
+                        conversation_id,
+                    )
+
             yield _sse("complete", {
+                "run_id": request.run_id,
                 "models": models,
                 "chairman_model": chairman_model,
             })
 
         except asyncio.CancelledError:
+            if not run_terminal:
+                cancelled = {
+                    "code": "cancelled",
+                    "message": "Council request cancelled.",
+                    "retryable": True,
+                }
+                await asyncio.shield(_persist_failed_run(
+                    conversation_id,
+                    request.run_id,
+                    cancelled,
+                    stage1_results,
+                    stage2_results,
+                    stage3_result,
+                    turn_metadata,
+                    status="cancelled",
+                ))
             raise
         except Exception:
             logger.exception("Council stream failed conversation=%s", conversation_id)
-            yield _sse("error", error={
+            failure = {
                 "code": "internal_error",
                 "message": "The council stopped because of an internal error.",
                 "retryable": True,
-            })
+            }
+            if not run_terminal:
+                await asyncio.shield(_persist_failed_run(
+                    conversation_id,
+                    request.run_id,
+                    failure,
+                    stage1_results,
+                    stage2_results,
+                    stage3_result,
+                    turn_metadata,
+                ))
+            yield _sse("error", error=failure, run_id=request.run_id)
         finally:
             if title_task and not title_task.done():
                 title_task.cancel()
-                with suppress(asyncio.CancelledError):
+            if title_task:
+                with suppress(asyncio.CancelledError, Exception):
                     await title_task
 
     return StreamingResponse(

@@ -7,6 +7,47 @@ from backend import providers
 
 
 @pytest.mark.asyncio
+async def test_remote_ollama_models_are_not_marked_local(monkeypatch) -> None:
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "models": [
+                    {"name": "qwen:7b", "size": 4_000_000_000},
+                    {"name": "hosted-cloud", "size": 0},
+                ],
+            }
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, _url):
+            return FakeResponse()
+
+    monkeypatch.setattr(providers.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(providers, "OLLAMA_ENDPOINT_IS_LOCAL", False)
+
+    models = await providers.list_ollama_models()
+    remote = next(model for model in models if model["name"] == "qwen:7b")
+    hosted = next(model for model in models if model["name"] == "hosted-cloud")
+
+    assert remote["source"] == "remote-ollama"
+    assert remote["is_local"] is False
+    assert remote["selectable"] is True
+    assert hosted["source"] == "ollama-cloud"
+    assert hosted["selectable"] is False
+
+
+@pytest.mark.asyncio
 async def test_query_model_retries_then_emits_completion(monkeypatch) -> None:
     calls = 0
     events = []

@@ -156,6 +156,21 @@ def test_consensus_metrics_reports_top_choice_agreement() -> None:
     assert metrics["agreement_level"] == "moderate"
 
 
+def test_consensus_metrics_reports_tied_top_choices() -> None:
+    metrics = calculate_consensus_metrics(
+        [
+            {"ranking_valid": True, "parsed_ranking": ["Response A", "Response B"]},
+            {"ranking_valid": True, "parsed_ranking": ["Response B", "Response A"]},
+        ],
+        {"Response A": "model-a", "Response B": "model-b"},
+    )
+
+    assert metrics["top_choice_model"] is None
+    assert metrics["tied_top_choice_models"] == ["model-a", "model-b"]
+    assert metrics["top_choice_votes"] == 1
+    assert metrics["agreement_level"] == "split"
+
+
 @pytest.mark.asyncio
 async def test_recommendations_prefer_same_review_profile(isolated_storage) -> None:
     """A code-topic question reviewed under different profiles should get

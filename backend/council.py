@@ -479,6 +479,7 @@ def calculate_consensus_metrics(
         return {
             "valid_ranking_count": 0,
             "top_choice_model": None,
+            "tied_top_choice_models": [],
             "top_choice_votes": 0,
             "top_choice_share": None,
             "agreement_level": "insufficient",
@@ -488,12 +489,15 @@ def calculate_consensus_metrics(
     vote_counts: Dict[str, int] = defaultdict(int)
     for label in top_choices:
         vote_counts[label] += 1
-    winning_label, winning_votes = max(
-        vote_counts.items(),
-        key=lambda item: (item[1], item[0]),
+    winning_votes = max(vote_counts.values())
+    winning_labels = sorted(
+        label for label, votes in vote_counts.items() if votes == winning_votes
     )
+    tied = len(winning_labels) > 1
     share = winning_votes / len(top_choices)
-    if share == 1:
+    if tied:
+        level = "split"
+    elif share == 1:
         level = "unanimous"
     elif share >= 0.67:
         level = "strong"
@@ -503,7 +507,14 @@ def calculate_consensus_metrics(
         level = "split"
     return {
         "valid_ranking_count": len(valid_rankings),
-        "top_choice_model": label_to_model.get(winning_label),
+        "top_choice_model": (
+            None if tied else label_to_model.get(winning_labels[0])
+        ),
+        "tied_top_choice_models": [
+            label_to_model[label]
+            for label in winning_labels
+            if label in label_to_model
+        ] if tied else [],
         "top_choice_votes": winning_votes,
         "top_choice_share": round(share, 3),
         "agreement_level": level,

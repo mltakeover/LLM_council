@@ -18,6 +18,7 @@ from .config import (
     API_KEYS,
     OLLAMA_BASE_URL,
     OLLAMA_DISCOVERY_TIMEOUT,
+    OLLAMA_ENDPOINT_IS_LOCAL,
     OLLAMA_MAX_CONCURRENCY,
     PROVIDER_MAX_ATTEMPTS,
     PROVIDER_RETRY_BASE_SECONDS,
@@ -106,17 +107,22 @@ async def list_ollama_models() -> List[Dict[str, Any]]:
             continue
 
         size = int(item.get("size") or 0)
-        is_cloud = model_name.endswith("-cloud") or size <= 0
+        is_ollama_cloud = model_name.endswith("-cloud") or size <= 0
+        is_local = OLLAMA_ENDPOINT_IS_LOCAL and not is_ollama_cloud
         details = item.get("details") or {}
 
         discovered.append({
             "id": f"ollama:{model_name}",
             "name": model_name,
             "provider": "ollama",
-            "source": "ollama-cloud" if is_cloud else "local",
-            "is_local": not is_cloud,
-            "is_cloud": is_cloud,
-            "selectable": not is_cloud,
+            "source": (
+                "ollama-cloud"
+                if is_ollama_cloud
+                else ("local" if is_local else "remote-ollama")
+            ),
+            "is_local": is_local,
+            "is_cloud": not is_local,
+            "selectable": not is_ollama_cloud,
             "size": size,
             "parameter_size": details.get("parameter_size"),
             "quantization": details.get("quantization_level"),
@@ -125,7 +131,7 @@ async def list_ollama_models() -> List[Dict[str, Any]]:
 
     return sorted(
         discovered,
-        key=lambda model: (model["is_cloud"], model["name"].lower()),
+        key=lambda model: (not model["is_local"], model["name"].lower()),
     )
 
 

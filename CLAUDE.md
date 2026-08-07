@@ -1,175 +1,139 @@
-# CLAUDE.md - Technical Notes for LLM Council
+# LLM Council engineering guide
 
-This file contains technical details, architectural decisions, and important implementation notes for future development sessions.
+This file is working context for coding assistants and contributors. The source
+of truth is the current code and tests; update this guide whenever architecture
+or operational behaviour changes.
 
-## Project Overview
+## Product summary
 
-LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively answer user questions. The key innovation is anonymized peer review in Stage 2, preventing models from playing favorites.
+LLM Council is a personal, local-first technical review application. A turn has
+three stages:
 
-## Architecture
+1. selected council models independently answer;
+2. successful answers are anonymised and peer-ranked;
+3. the selected Chairman returns a structured report and Markdown rendering.
 
-### Backend Structure (`backend/`)
+It supports directly configured OpenAI, Anthropic, Google Gemini, and xAI APIs,
+plus dynamically discovered Ollama models. It does not use OpenRouter.
 
-**`config.py`**
-- Contains `COUNCIL_MODELS` (list of OpenRouter model identifiers)
-- Contains `CHAIRMAN_MODEL` (model that synthesizes final answer)
-- Uses environment variable `OPENROUTER_API_KEY` from `.env`
-- Backend runs on **port 8001** (NOT 8000 - user had another app on 8000)
+## Runtime and commands
 
-**`openrouter.py`**
-- `query_model()`: Single async model query
-- `query_models_parallel()`: Parallel queries using `asyncio.gather()`
-- Returns dict with 'content' and optional 'reasoning_details'
-- Graceful degradation: returns None on failure, continues with successful responses
+- Python 3.10+, FastAPI backend on port 8001
+- React 19 and Vite frontend, normally on port 5173
+- SQLite at `DATABASE_PATH` (default `data/llm_council.db`)
 
-**`council.py`** - The Core Logic
-- `stage1_collect_responses()`: Parallel queries to all council models. Accepts an optional `history` list (prior-turn messages) so follow-up questions carry real conversation context.
-- `stage2_collect_rankings()`:
-  - Anonymizes responses as "Response A, B, C, etc."
-  - Creates `label_to_model` mapping for de-anonymization
-  - Prompts models to evaluate and rank (with strict format requirements)
-  - Returns tuple: (rankings_list, label_to_model_dict)
-  - Each ranking includes both raw text and `parsed_ranking` list
-  - Also accepts `history`
-- `stage3_synthesize_final()`: Chairman synthesizes from all responses + rankings. Also accepts `history`.
-- `parse_ranking_from_text()`: Extracts "FINAL RANKING:" section, handles both numbered lists and plain format
-- `calculate_aggregate_rankings()`: Computes average rank position across all peer evaluations
-- `classify_question(text)`: Lightweight **keyword-based** topic guess (`"code"` / `"creative"` / `"analysis"` / `"general"`). Deliberately not a claim about which model is good at what - there's no verified benchmark data backing that, and it would go stale. It only buckets a question so recommendations compare like with like.
-- `get_model_recommendations(question, ...)`: Self-learning model suggestions. Scans every stored conversation (`storage.get_all_conversations()`), finds ones whose first message classifies into the same category, averages each model's persisted `aggregate_rankings.average_rank` across those, and returns the best performers. Returns an **empty** recommendation (never a guess) when there isn't at least `minimum_conversations` of matching history - this is the actual "smart model selection" feature, driven entirely by this deployment's own peer-review outcomes.
+From the repository root:
 
-**Conversation memory**: `main.py` builds a `history` list from the current conversation's prior turns (via `_history_from_conversation()`) before calling into `council.py`. Each earlier turn's "assistant" contribution is the **chairman's Stage 3 answer** - the one reply the user actually saw - not the individual council responses or rankings, which stay internal to that turn. Without this, every message would be answered as if asked cold, with zero memory of the conversation so far.
-
-**`storage.py`**
-- JSON-based conversation storage in `data/conversations/`
-- Each conversation: `{id, created_at, messages[]}`
-- Assistant messages contain: `{role, stage1, stage2, stage3, metadata}` - `metadata` (`label_to_model`, `aggregate_rankings`) **is persisted** (added because (a) reloading an old conversation was silently losing its de-anonymized names and aggregate rankings, and (b) `get_model_recommendations` needs it to learn from past turns)
-- All I/O is async (`asyncio.to_thread`); writes to one conversation are serialized with a per-conversation `asyncio.Lock`; `list_conversations()` reads from an in-memory metadata cache instead of re-parsing every file
-- `get_all_conversations()`: loads every conversation in full - used only by `get_model_recommendations`, not the hot path
-
-**`main.py`**
-- FastAPI app with CORS enabled for localhost:5173 and localhost:3000
-- POST `/api/conversations/{id}/message` returns metadata in addition to stages
-- Metadata includes: label_to_model mapping and aggregate_rankings
-- POST `/api/recommend-models` `{content}` → `{category, recommended, scores, based_on_conversations}` - see `get_model_recommendations` above
-- DELETE / PATCH `/api/conversations/{id}` - delete and rename
-
-### Frontend Structure (`frontend/src/`)
-
-**`App.jsx`**
-- Main orchestration: manages conversations list and current conversation
-- Handles message sending and metadata storage
-- Important: metadata is stored in the UI state for display but not persisted to backend JSON
-
-**`components/ChatInterface.jsx`**
-- Multiline textarea (3 rows, resizable)
-- Enter to send, Shift+Enter for new line
-- User messages wrapped in markdown-content class for padding
-
-**`components/Stage1.jsx`**
-- Tab view of individual model responses
-- ReactMarkdown rendering with markdown-content wrapper
-
-**`components/Stage2.jsx`**
-- **Critical Feature**: Tab view showing RAW evaluation text from each model
-- De-anonymization happens CLIENT-SIDE for display (models receive anonymous labels)
-- Shows "Extracted Ranking" below each evaluation so users can validate parsing
-- Aggregate rankings shown with average position and vote count
-- Explanatory text clarifies that boldface model names are for readability only
-
-**`components/Stage3.jsx`**
-- Final synthesized answer from chairman
-- Green-tinted background (#f0fff0) to highlight conclusion
-
-**Styling (`*.css`)**
-- Light mode theme (not dark mode)
-- Primary color: #4a90e2 (blue)
-- Global markdown styling in `index.css` with `.markdown-content` class
-- 12px padding on all markdown content to prevent cluttered appearance
-
-## Key Design Decisions
-
-### Stage 2 Prompt Format
-The Stage 2 prompt is very specific to ensure parseable output:
-```
-1. Evaluate each response individually first
-2. Provide "FINAL RANKING:" header
-3. Numbered list format: "1. Response C", "2. Response A", etc.
-4. No additional text after ranking section
+```bash
+python -m pip install -e '.[dev]'
+python -m uvicorn backend.main:app --reload --port 8001
+ruff check backend tests
+pytest -q
 ```
 
-This strict format allows reliable parsing while still getting thoughtful evaluations.
+From `frontend/`:
 
-### De-anonymization Strategy
-- Models receive: "Response A", "Response B", etc.
-- Backend creates mapping: `{"Response A": "openai/gpt-5.1", ...}`
-- Frontend displays model names in **bold** for readability
-- Users see explanation that original evaluation used anonymous labels
-- This prevents bias while maintaining transparency
-
-### Error Handling Philosophy
-- Continue with successful responses if some models fail (graceful degradation)
-- Never fail the entire request due to single model failure
-- Log errors but don't expose to user unless all models fail
-
-### UI/UX Transparency
-- All raw outputs are inspectable via tabs
-- Parsed rankings shown below raw text for validation
-- Users can verify system's interpretation of model outputs
-- This builds trust and allows debugging of edge cases
-
-## Important Implementation Details
-
-### Relative Imports
-All backend modules use relative imports (e.g., `from .config import ...`) not absolute imports. This is critical for Python's module system to work correctly when running as `python -m backend.main`.
-
-### Port Configuration
-- Backend: 8001 (changed from 8000 to avoid conflict)
-- Frontend: 5173 (Vite default)
-- Update both `backend/main.py` and `frontend/src/api.js` if changing
-
-### Markdown Rendering
-All ReactMarkdown components must be wrapped in `<div className="markdown-content">` for proper spacing. This class is defined globally in `index.css`.
-
-### Model Configuration
-Models are hardcoded in `backend/config.py`. Chairman can be same or different from council members. The current default is Gemini as chairman per user preference.
-
-## Common Gotchas
-
-1. **Module Import Errors**: Always run backend as `python -m backend.main` from project root, not from backend directory
-2. **CORS Issues**: Frontend must match allowed origins in `main.py` CORS middleware
-3. **Ranking Parse Failures**: If models don't follow format, fallback regex extracts any "Response X" patterns in order
-4. **Cold-start recommendations**: `get_model_recommendations()` returns an empty `recommended` list until there's real matching history for that question's category - this is intentional, not a bug, so double-check `based_on_conversations` before assuming something's broken
-5. **History growth**: `history` passed into the council stages grows with every turn (each turn adds a user message + the chairman's answer). No trimming/summarization yet - fine for normal conversations, but very long-running ones will grow the prompt sent to every model each turn
-
-## Future Enhancement Ideas
-
-- Configurable council/chairman via UI instead of config file
-- Streaming responses instead of batch loading
-- Export conversations to markdown/PDF
-- Model performance analytics over time
-- Custom ranking criteria (not just accuracy/insight)
-- Support for reasoning models (o1, etc.) with special handling
-
-## Testing Notes
-
-Use `test_openrouter.py` to verify API connectivity and test different model identifiers before adding to council. The script tests both streaming and non-streaming modes.
-
-## Data Flow Summary
-
-```
-User Query
-    ↓
-Stage 1: Parallel queries → [individual responses]
-    ↓
-Stage 2: Anonymize → Parallel ranking queries → [evaluations + parsed rankings]
-    ↓
-Aggregate Rankings Calculation → [sorted by avg position]
-    ↓
-Stage 3: Chairman synthesis with full context
-    ↓
-Return: {stage1, stage2, stage3, metadata}
-    ↓
-Frontend: Display with tabs + validation UI
+```bash
+npm ci
+npm run dev
+npm test
+npm run lint
+npm run build
 ```
 
-The entire flow is async/parallel where possible to minimize latency.
+CI is defined in `.github/workflows/ci.yml` and runs without provider keys.
+
+## Backend map
+
+- `backend/config.py`: environment parsing, provider/model defaults, loopback
+  classification, timeouts, context and document limits.
+- `backend/providers.py`: direct SDK adapters, Ollama discovery, concurrency,
+  retries, normalized results/errors, and model progress callbacks.
+- `backend/council.py`: prompts, document map/reduce, anonymous ranking,
+  consensus metrics, structured Chairman reports, and model recommendations.
+- `backend/main.py`: FastAPI models/routes, privacy validation, SSE orchestration,
+  run lifecycle, uploads, usage estimates, and cancellation.
+- `backend/storage.py`: SQLite schema/migrations, conversations, messages,
+  documents, run idempotency, and one-time legacy JSON import.
+- `backend/documents.py`: bounded extraction and chunking for supported files.
+- `backend/review_profiles.py`: built-in General, HLD, LLD, Code, and Security
+  reviewer instructions.
+
+All backend imports are package-relative. Run with `python -m backend.main` or
+Uvicorn from the repository root; do not run `backend/main.py` directly.
+
+## Frontend map
+
+- `src/App.jsx`: catalogue/selection state, SSE event handling, idempotent retry,
+  privacy state, conversation orchestration, and progress state.
+- `src/api.js`: backend client and chunk-safe SSE parser.
+- `src/components/CouncilFlow.jsx`: live per-model progress and details.
+- `src/components/ChatInterface.jsx`: composer, files, estimates, confirmation,
+  retry/cancel, transcript, and exports.
+- `src/components/Stage1.jsx`, `Stage2.jsx`, `Stage3.jsx`: turn inspection.
+- `src/components/FindingsDashboard.jsx`, `ConsensusPanel.jsx`: structured
+  Chairman report views.
+- `src/components/Sidebar.jsx`, `CouncilPresets.jsx`, `ProviderStatus.jsx`:
+  model configuration, presets, conversations, and connectivity checks.
+- `src/utils/exportConversation.js`: Markdown, DOCX, and PDF exports.
+
+## Critical invariants
+
+### Model IDs and privacy
+
+Model IDs always use `provider:model-name`. Ollama can contain another colon,
+for example `ollama:qwen2.5-coder:7b`, so split only on the first colon.
+
+Only an explicit loopback `OLLAMA_BASE_URL` is local. Remote Ollama models are
+labelled remote and require cloud-processing confirmation. Ollama cloud entries
+(zero size or `-cloud` suffix) are not selectable. Direct cloud models require
+confirmation. While a conversation still has its default title, a non-local
+`TITLE_MODEL` also requires confirmation and receives the prompt only, never
+document text.
+
+Do not log API keys, prompts, document contents, or full provider response
+bodies. Provider data retention/training is governed by the user's provider
+account, not guaranteed by this application.
+
+### Runs, retries, and cancellation
+
+Every message request carries a UUID `run_id`. `storage.begin_run()` atomically
+inserts the run and its user message. The same ID may resume only a failed or
+cancelled run with byte-equivalent canonical inputs. It must reject changed,
+active, or completed runs. Assistant messages are upserted per run, preventing
+duplicate transcript turns.
+
+The SSE generator owns provider tasks. Closing it must cancel and await the
+active task. Terminal state is persisted as `completed`, `failed`, or
+`cancelled`; startup converts orphaned `running` rows to retryable failures.
+Ancillary title failure must not invalidate a completed council result.
+
+### Council stages
+
+Continue when some Stage 1 or Stage 2 models fail. Stop before Stage 2 when all
+Stage 1 models fail. Stage 2 labels remain anonymous inside model prompts;
+de-anonymise only through persisted `label_to_model` metadata for display and
+aggregation. Reject invalid rankings rather than re-parsing a deliberately
+empty `parsed_ranking`. Do not invent a single winner for tied top-choice votes.
+
+### Context and documents
+
+Context includes prior user messages and Chairman responses only, newest within
+`MAX_CONTEXT_CHARACTERS`. Exclude the current `run_id`, especially on retry.
+
+Uploaded original bytes are discarded after extraction. SQLite retains text
+and bounded chunks. A document beyond `MAX_DOCUMENT_CHUNKS` is marked
+`truncated`; never hide this status. Usage estimates must count the chunks that
+will actually be sent, not discarded source text. Treat user files and model
+answers as untrusted evidence in prompts.
+
+## Test expectations
+
+Add regression coverage for behavioural changes. In particular preserve tests
+for structured retries, stream cancellation, run idempotency/conflicts,
+first-turn title privacy, remote Ollama classification, document truncation,
+ranking validation/ties, SQLite migration, SSE terminal errors, and frontend
+run ID/export helpers. Tests must not make real provider calls.
+
+Before handing off a change, run the complete backend and frontend commands
+listed above and report any check that could not run.

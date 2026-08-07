@@ -1,5 +1,7 @@
 # LLM Council
 
+Current release: **v0.3.1 — Reliability & Privacy**
+
 A local-first multi-model review application for high-level designs (HLDs),
 low-level designs (LLDs), code, security reviews, technical decisions, and
 general questions.
@@ -21,6 +23,7 @@ used.
 - Side-by-side council response comparison
 - Structured provider errors, timeouts, exponential backoff, and safe logging
 - A guard that stops the stream if every Stage 1 model fails
+- Cancellable provider tasks plus persisted, idempotent run IDs and retry states
 - Structured Chairman findings with severity, evidence, impact, and remediation
 - Filterable findings dashboard plus semantic consensus and ranking agreement
 - TXT, Markdown, source code, JSON, YAML, TOML, CSV, SQL, XML, HTML, CSS, PDF,
@@ -28,10 +31,11 @@ used.
 - Bounded overlapping chunks and per-model map/reduce review for long documents
 - SQLite conversations, messages, document text, and automatic legacy JSON import
 - Pre-send cloud-processing confirmation and approximate input/call estimates
+- Explicit remote-Ollama and cloud-title privacy handling
 - Provider status screen with privacy-safe connectivity tests
 - Built-in and user-saved council presets
 - Conversation search, rename, delete, retry, and Markdown, DOCX, or PDF export
-- Backend and frontend test suites
+- Backend and frontend test suites with GitHub Actions CI
 
 ## How the council works
 
@@ -180,6 +184,10 @@ Click **Refresh** under **Council Models** in the UI. The model appears
 automatically. Ollama entries marked as cloud-only are shown but are not treated
 as local selectable models.
 
+Only loopback Ollama URLs (`localhost`, `127.0.0.1`, or `::1`) are classified as
+local. A LAN or internet-hosted `OLLAMA_BASE_URL` remains selectable, is labelled
+**Remote**, and requires the same confirmation as a direct cloud model.
+
 ## Optional direct cloud providers
 
 Add only the credentials and model IDs you intend to use:
@@ -274,7 +282,8 @@ The root backend health response is available at
 4. Choose a General, HLD, LLD, Code, or Security review profile.
 5. Choose whether recent conversation context should be included.
 6. Optionally upload and select up to five documents.
-7. If a cloud model is selected, read and accept the cloud-processing notice.
+7. If a cloud model, remote Ollama endpoint, or cloud title model is involved,
+   read and accept the cloud-processing notice.
 8. Review the approximate token and call estimate, then send.
 9. Watch each model move through its own live status; click a model or the
    Chairman to inspect timings, attempts, errors, and reported token usage.
@@ -287,7 +296,9 @@ The root backend health response is available at
 Files stay available within their conversation until individually deleted or
 the conversation is deleted. Long files are automatically split into bounded,
 overlapping chunks. Each selected model reviews the chunks and consolidates its
-own notes before anonymous peer review.
+own notes before anonymous peer review. If a file exceeds `MAX_DOCUMENT_CHUNKS`,
+the UI marks it as truncated and the estimate counts only chunks that will
+actually be reviewed.
 
 ## Review profile examples
 
@@ -317,17 +328,22 @@ evidence and avoid speculative findings.
 ## Data handling and privacy
 
 - The app binds to loopback by default and does not require OpenRouter.
-- Ollama model requests stay on the configured Ollama endpoint. Do not change
-  `OLLAMA_BASE_URL` to a remote host if local-only processing is required.
-- Prompts and selected extracted document text are sent to every selected cloud
-  model. The UI requires an explicit confirmation for that run.
+- Ollama is considered local only when `OLLAMA_BASE_URL` uses an explicit
+  loopback host. Remote Ollama endpoints require confirmation before processing.
+- Prompts and selected extracted document text are sent to selected non-local
+  council models only after explicit confirmation.
+- While a conversation still needs its generated title, a non-local
+  `TITLE_MODEL` receives the next prompt (but not selected document text) only
+  after that same confirmation.
 - Direct API access does **not**, by itself, guarantee a particular retention or
   training policy. Those controls are governed by each provider, API product,
   contract, and account configuration.
 - OpenAI calls set `store=False`; other SDK calls use their direct API defaults.
   Confirm the current provider settings that apply to your account.
 - Original uploaded bytes are not retained. Extracted text, chunks, messages,
-  and model outputs are stored in local SQLite at `DATABASE_PATH`.
+  model outputs, and run status are stored in local SQLite at `DATABASE_PATH`.
+- Every council submission has a UUID `run_id`. Failed or cancelled runs can be
+  retried with the same ID without duplicating the user or assistant message.
 - Deleting a conversation cascades to its messages and extracted documents.
 - `.env`, SQLite databases, legacy conversation files, build output, IDE files,
   and dependencies are ignored by Git.
@@ -350,6 +366,7 @@ deleted. Keep a backup until you confirm the imported conversations in the UI.
 | `GET` | `/api/review-profiles` | Built-in review profiles |
 | `GET/POST` | `/api/conversations` | List or create conversations |
 | `GET/PATCH/DELETE` | `/api/conversations/{id}` | Read, rename, or delete a conversation |
+| `GET` | `/api/conversations/{id}/runs/{run_id}` | Inspect persisted run status and structured error |
 | `POST` | `/api/conversations/{id}/documents` | Extract and store one supported file |
 | `GET` | `/api/conversations/{id}/documents` | List conversation documents |
 | `DELETE` | `/api/conversations/{id}/documents/{document_id}` | Delete a document |
@@ -363,6 +380,10 @@ Provider progress SSE event types are `model_started`, `model_retrying`,
 stage. Successful provider events include normalized token usage when the
 provider reports it. Terminal stream events are `complete` or a structured
 `error`.
+
+Both message endpoints accept a UUID `run_id`. Clients should keep the same ID
+when retrying the same inputs; changing any input while reusing an ID returns
+HTTP 409.
 
 ## Development and tests
 
@@ -390,7 +411,9 @@ npm run build
 ```
 
 The automated tests mock model execution and do not require Ollama or cloud
-credentials.
+credentials. `.github/workflows/ci.yml` runs the backend suite on Python 3.10
+and 3.12, then tests, lints, and builds the frontend on Node 20 for pushes and
+pull requests targeting `master`.
 
 ## Troubleshooting
 
@@ -430,6 +453,13 @@ is valid for the account. Restart the backend after `.env` changes.
 The stream now stops before peer review and returns `all_models_failed`. Inspect
 the UI model cards or backend log for structured error codes such as `timeout`,
 `connection`, `authentication`, `model_not_found`, or `rate_limit`.
+
+### A retry reports that the run is still in progress
+
+Cancellation is cooperative: the browser closes the stream and the backend
+cancels the active provider task before persisting `cancelled`. Wait briefly and
+retry with the same run ID. After a process restart, any orphaned `running` run
+is automatically marked failed and becomes retryable.
 
 ### Editable install reports multiple top-level packages
 
