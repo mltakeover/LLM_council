@@ -413,9 +413,19 @@ def calculate_aggregate_rankings(
 ) -> List[Dict[str, Any]]:
     model_positions: Dict[str, List[int]] = defaultdict(list)
     for ranking in stage2_results:
-        parsed_ranking = ranking.get("parsed_ranking") or parse_ranking_from_text(
-            ranking.get("ranking", "")
-        )
+        if "parsed_ranking" in ranking:
+            # Trust the upstream validator (stage2_collect_rankings). A
+            # ranking it already rejected has parsed_ranking == [] and
+            # ranking_valid == False - falling back to a raw-text re-parse
+            # here would silently un-reject it (e.g. a duplicate-label
+            # response gets a position counted twice), which previously
+            # happened because `ranking.get("parsed_ranking") or ...`
+            # can't tell "rejected, deliberately empty" apart from
+            # "field missing" - both are falsy.
+            parsed_ranking = ranking["parsed_ranking"]
+        else:
+            # Legacy stage2 results predating this field.
+            parsed_ranking = parse_ranking_from_text(ranking.get("ranking", ""))
         for position, label in enumerate(parsed_ranking, start=1):
             if label in label_to_model:
                 model_positions[label_to_model[label]].append(position)
@@ -678,14 +688,28 @@ def classify_question(text: str) -> str:
     return "general"
 
 
-async def get_model_recommendations(
-    question: str,
-    exclude_conversation_id: Optional[str] = None,
-    minimum_conversations: int = 1,
-    top_n: int = 3,
-) -> Dict[str, Any]:
-    category = classify_question(question)
-    conversations = await storage.get_all_conversations()
+def _conversation_review_profile(conversation: Dict[str, Any]) -> Optional[str]:
+    """The review profile a stored conversation was run with, taken from
+    its first assistant turn's persisted metadata. None for conversations
+    saved before this field existed.
+    """
+    for message in conversation.get("messages") or []:
+        if message.get("role") == "assistant":
+            return (message.get("metadata") or {}).get("review_profile")
+    return None
+
+
+def _collect_model_ranks(
+    conversations: List[Dict[str, Any]],
+    category: str,
+    normalized_profile: Optional[str],
+    exclude_conversation_id: Optional[str],
+) -> Tuple[Dict[str, List[float]], int]:
+    """Aggregate per-model average_rank across stored conversations whose
+    first message matches `category`, optionally also requiring the
+    conversation's own review profile to match `normalized_profile`
+    (pass None to skip the profile filter and match on topic alone).
+    """
     model_ranks: Dict[str, List[float]] = defaultdict(list)
     matched_conversations = 0
 
@@ -701,6 +725,10 @@ async def get_model_recommendations(
             continue
         if classify_question(first_user_message.get("content", "")) != category:
             continue
+        if normalized_profile is not None:
+            conversation_profile = _conversation_review_profile(conversation) or "general"
+            if conversation_profile != normalized_profile:
+                continue
 
         conversation_matched = False
         for message in messages:
@@ -718,14 +746,10 @@ async def get_model_recommendations(
         if conversation_matched:
             matched_conversations += 1
 
-    if matched_conversations < minimum_conversations or not model_ranks:
-        return {
-            "category": category,
-            "recommended": [],
-            "scores": [],
-            "based_on_conversations": matched_conversations,
-        }
+    return model_ranks, matched_conversations
 
+
+def _rank_models(model_ranks: Dict[str, List[float]], top_n: int) -> List[Dict[str, Any]]:
     ranked_models = sorted(
         (
             {
@@ -737,9 +761,59 @@ async def get_model_recommendations(
         ),
         key=lambda item: item["average_rank"],
     )
+    return ranked_models[:top_n]
+
+
+async def get_model_recommendations(
+    question: str,
+    review_profile: str = "general",
+    exclude_conversation_id: Optional[str] = None,
+    minimum_conversations: int = 1,
+    top_n: int = 3,
+) -> Dict[str, Any]:
+    """Recommend council models from this deployment's own peer-review
+    history, matched on both question topic and review profile - a code
+    review and a security review of similar-sounding questions can favor
+    different models, so both are used to compare "similar past turns"
+    like with like.
+
+    Tries the profile-specific match first (same topic AND same review
+    profile). If that doesn't have enough history yet, falls back to the
+    topic-only match instead of going silent - a narrower, more useful
+    combination (topic + profile) earns its keep once there's data for it,
+    without making the feature less useful in the meantime. `scores`/
+    `recommended` are still only ever real historical averages, never a
+    guess: an empty `recommended` still means "no matching history."
+    """
+    category = classify_question(question)
+    normalized_profile = (review_profile or "general").strip().lower()
+    conversations = await storage.get_all_conversations()
+
+    model_ranks, matched_conversations = _collect_model_ranks(
+        conversations, category, normalized_profile, exclude_conversation_id,
+    )
+    matched_profile: Optional[str] = normalized_profile
+
+    if matched_conversations < minimum_conversations or not model_ranks:
+        model_ranks, matched_conversations = _collect_model_ranks(
+            conversations, category, None, exclude_conversation_id,
+        )
+        matched_profile = None
+
+    if matched_conversations < minimum_conversations or not model_ranks:
+        return {
+            "category": category,
+            "review_profile": None,
+            "recommended": [],
+            "scores": [],
+            "based_on_conversations": matched_conversations,
+        }
+
+    ranked_models = _rank_models(model_ranks, top_n)
     return {
         "category": category,
-        "recommended": [item["model"] for item in ranked_models[:top_n]],
-        "scores": ranked_models[:top_n],
+        "review_profile": matched_profile,
+        "recommended": [item["model"] for item in ranked_models],
+        "scores": ranked_models,
         "based_on_conversations": matched_conversations,
     }

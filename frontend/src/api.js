@@ -76,11 +76,11 @@ export const api = {
    * `signal` to cancel a stale in-flight request (e.g. the user kept
    * typing).
    */
-  async recommendModels(content, signal) {
+  async recommendModels(content, reviewProfile, signal) {
     const response = await fetch(`${API_BASE}/api/recommend-models`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, review_profile: reviewProfile }),
       signal,
     });
     if (!response.ok) {

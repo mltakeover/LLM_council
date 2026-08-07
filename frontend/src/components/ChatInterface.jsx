@@ -30,6 +30,7 @@ export default function ChatInterface({
   selectedModels,
   chairmanModel,
   reviewProfile,
+  reviewProfiles,
   includeContext,
   requiresCloudConfirmation,
   cloudModelNames,
@@ -98,7 +99,11 @@ export default function ChatInterface({
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const result = await api.recommendModels(trimmed, controller.signal);
+        const result = await api.recommendModels(
+          trimmed,
+          reviewProfile,
+          controller.signal,
+        );
         setRecommendation(
           result.recommended && result.recommended.length > 0 ? result : null
         );
@@ -113,7 +118,7 @@ export default function ChatInterface({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [input, isLoading]);
+  }, [input, isLoading, reviewProfile]);
 
   useEffect(() => {
     if (!conversation?.id || isLoading || (!input.trim() && selectedDocumentIds.length === 0)) {
@@ -362,7 +367,14 @@ export default function ChatInterface({
             similar past {recommendation.based_on_conversations === 1 ? 'conversation' : 'conversations'},{' '}
             <strong>{recommendation.recommended.map(shortModelName).join(', ')}</strong>
             {' '}{recommendation.recommended.length === 1 ? 'has' : 'have'} ranked best
-            for {recommendation.category} questions in your council.
+            for {recommendation.category} questions
+            {recommendation.review_profile && (
+              <> reviewed with{' '}
+                {(reviewProfiles || []).find((profile) => (
+                  profile.id === recommendation.review_profile
+                ))?.name || recommendation.review_profile}
+              </>
+            )} in your council.
           </span>
           <div className="suggestion-actions">
             <button

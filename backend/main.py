@@ -62,6 +62,13 @@ class CreateConversationRequest(BaseModel):
     pass
 
 
+def _normalized_review_profile(value: str) -> str:
+    normalized = value.strip().lower()
+    if not is_valid_review_profile(normalized):
+        raise ValueError("unknown review profile")
+    return normalized
+
+
 class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=MAX_PROMPT_CHARACTERS)
     models: Optional[List[str]] = None
@@ -85,10 +92,7 @@ class SendMessageRequest(BaseModel):
     @field_validator("review_profile")
     @classmethod
     def profile_must_exist(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        if not is_valid_review_profile(normalized):
-            raise ValueError("unknown review profile")
-        return normalized
+        return _normalized_review_profile(value)
 
 
 class RenameConversationRequest(BaseModel):
@@ -97,6 +101,12 @@ class RenameConversationRequest(BaseModel):
 
 class RecommendModelsRequest(BaseModel):
     content: str = Field(min_length=1, max_length=MAX_PROMPT_CHARACTERS)
+    review_profile: str = "general"
+
+    @field_validator("review_profile")
+    @classmethod
+    def profile_must_exist(cls, value: str) -> str:
+        return _normalized_review_profile(value)
 
 
 class UsageEstimateRequest(BaseModel):
@@ -337,7 +347,10 @@ async def get_models():
 
 @app.post("/api/recommend-models")
 async def recommend_models(request: RecommendModelsRequest):
-    return await get_model_recommendations(request.content.strip())
+    return await get_model_recommendations(
+        request.content.strip(),
+        request.review_profile,
+    )
 
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata])

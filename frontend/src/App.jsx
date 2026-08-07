@@ -758,6 +758,7 @@ function App() {
           selectedModels={selectedModels}
           chairmanModel={chairmanModel}
           reviewProfile={reviewProfile}
+          reviewProfiles={reviewProfiles}
           includeContext={includeContext}
           requiresCloudConfirmation={requiresCloudConfirmation}
           cloudModelNames={cloudModels.map((model) => model.name)}

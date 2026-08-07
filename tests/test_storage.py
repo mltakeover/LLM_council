@@ -1,10 +1,16 @@
 import json
+import os
 import uuid
 
 import pytest
 
 from backend import storage
 from backend.documents import extract_document
+
+
+def _open_fd_count() -> int:
+    """Count this process's open file descriptors (Linux/macOS only)."""
+    return len(os.listdir(f"/proc/{os.getpid()}/fd"))
 
 
 @pytest.fixture
@@ -42,6 +48,42 @@ async def test_sqlite_conversation_message_document_lifecycle(isolated_storage) 
 
     assert await storage.delete_conversation(conversation_id) is True
     assert await storage.list_documents(conversation_id) == []
+
+
+@pytest.mark.skipif(
+    not os.path.isdir("/proc/self/fd"),
+    reason="Open-fd introspection via /proc is Linux-only.",
+)
+@pytest.mark.asyncio
+async def test_storage_operations_do_not_leak_connections(isolated_storage) -> None:
+    """Regression test: every storage op used to open a sqlite3 connection
+    via `with _connect() as connection:` and never close it, since that
+    context-manager form only manages the transaction, not the connection
+    lifecycle. Left unfixed, this leaks one fd per call - and
+    get_all_conversations() leaks one per stored conversation on every
+    call, which the model-recommendation feature triggers on every
+    debounced keystroke.
+    """
+    conversation_id = str(uuid.uuid4())
+    await storage.create_conversation(conversation_id)
+
+    baseline = _open_fd_count()
+
+    for _ in range(25):
+        await storage.add_user_message(conversation_id, "hello")
+        await storage.get_conversation(conversation_id)
+        await storage.list_conversations()
+        await storage.get_all_conversations()
+
+    after = _open_fd_count()
+
+    # A handful of fds can legitimately fluctuate (event loop internals,
+    # etc.) - the leak this guards against would add dozens to hundreds
+    # over this many calls, so a small constant margin is a safe threshold.
+    assert after <= baseline + 5, (
+        f"open file descriptors grew from {baseline} to {after} after "
+        "100 storage operations - looks like a connection leak"
+    )
 
 
 @pytest.mark.asyncio

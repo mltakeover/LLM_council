@@ -4,9 +4,10 @@ import asyncio
 import json
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from .config import DATA_DIR, DATABASE_PATH
 
@@ -45,6 +46,28 @@ def _connect() -> sqlite3.Connection:
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 5000")
     return connection
+
+
+@contextmanager
+def _connection() -> Iterator[sqlite3.Connection]:
+    """Open a connection, commit/rollback its transaction, and always close it.
+
+    `with sqlite3.Connection(...) as conn:` only manages the transaction
+    (commit on success, rollback on exception) - it does NOT close the
+    connection. Every call site here used to do exactly that and never
+    closed the connection, leaking one file descriptor per storage
+    operation for the life of the process (get_all_conversations() alone
+    leaks one connection per stored conversation on every call, since it
+    opens a fresh one per conversation via this same path). Closing it in
+    a `finally` here fixes that for every call site at once.
+    """
+
+    connection = _connect()
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def _create_schema(connection: sqlite3.Connection) -> None:
@@ -144,7 +167,7 @@ def _import_legacy_json(connection: sqlite3.Connection) -> int:
 
 
 def _initialize_sync() -> None:
-    with _connect() as connection:
+    with _connection() as connection:
         _create_schema(connection)
         _import_legacy_json(connection)
         connection.commit()
@@ -165,7 +188,7 @@ def _conversation_sync(conversation_id: str) -> Optional[Dict[str, Any]]:
     if not _is_valid_conversation_id(conversation_id):
         return None
 
-    with _connect() as connection:
+    with _connection() as connection:
         row = connection.execute(
             "SELECT id, created_at, title FROM conversations WHERE id = ?",
             (conversation_id,),
@@ -206,7 +229,7 @@ def _create_conversation_sync(conversation_id: str) -> Dict[str, Any]:
         "title": "New Conversation",
         "messages": [],
     }
-    with _connect() as connection:
+    with _connection() as connection:
         connection.execute(
             """
             INSERT INTO conversations(id, created_at, title)
@@ -232,7 +255,7 @@ async def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _list_conversations_sync() -> List[Dict[str, Any]]:
-    with _connect() as connection:
+    with _connection() as connection:
         rows = connection.execute(
             """
             SELECT c.id, c.created_at, c.title, COUNT(m.id) AS message_count
@@ -253,7 +276,7 @@ async def list_conversations() -> List[Dict[str, Any]]:
 def _delete_conversation_sync(conversation_id: str) -> bool:
     if not _is_valid_conversation_id(conversation_id):
         return False
-    with _connect() as connection:
+    with _connection() as connection:
         cursor = connection.execute(
             "DELETE FROM conversations WHERE id = ?",
             (conversation_id,),
@@ -272,7 +295,7 @@ def _insert_message_sync(
 ) -> None:
     if not _is_valid_conversation_id(conversation_id):
         raise ValueError("Conversation id must be a UUID.")
-    with _connect() as connection:
+    with _connection() as connection:
         cursor = connection.execute(
             "SELECT 1 FROM conversations WHERE id = ?",
             (conversation_id,),
@@ -334,7 +357,7 @@ async def add_assistant_message(
 def _update_title_sync(conversation_id: str, title: str) -> None:
     if not _is_valid_conversation_id(conversation_id):
         raise ValueError("Conversation id must be a UUID.")
-    with _connect() as connection:
+    with _connection() as connection:
         cursor = connection.execute(
             "UPDATE conversations SET title = ? WHERE id = ?",
             (title, conversation_id),
@@ -349,7 +372,7 @@ async def update_conversation_title(conversation_id: str, title: str) -> None:
 
 
 def _all_conversations_sync() -> List[Dict[str, Any]]:
-    with _connect() as connection:
+    with _connection() as connection:
         ids = [
             row["id"]
             for row in connection.execute(
@@ -377,7 +400,7 @@ def _create_document_sync(
 
     document_id = str(uuid.uuid4())
     created_at = _utc_now()
-    with _connect() as connection:
+    with _connection() as connection:
         exists = connection.execute(
             "SELECT 1 FROM conversations WHERE id = ?",
             (conversation_id,),
@@ -459,7 +482,7 @@ def _documents_sync(
     if include_content:
         columns += ", text_content, chunks_json"
 
-    with _connect() as connection:
+    with _connection() as connection:
         rows = connection.execute(
             f"SELECT {columns} FROM documents WHERE {where} ORDER BY created_at",
             parameters,
@@ -500,7 +523,7 @@ async def get_documents(
 def _delete_document_sync(conversation_id: str, document_id: str) -> bool:
     if not _is_valid_conversation_id(conversation_id):
         return False
-    with _connect() as connection:
+    with _connection() as connection:
         cursor = connection.execute(
             "DELETE FROM documents WHERE id = ? AND conversation_id = ?",
             (document_id, conversation_id),
