@@ -16,6 +16,20 @@ _legacy_data_dir = DATA_DIR
 _initialized = False
 _initialization_lock = asyncio.Lock()
 
+RUN_STATUSES = frozenset({"running", "completed", "failed", "cancelled"})
+
+
+class RunConflictError(ValueError):
+    """Raised when a run id is reused for a different request."""
+
+
+class RunInProgressError(ValueError):
+    """Raised when a second request attempts to start an active run."""
+
+
+class RunAlreadyCompletedError(ValueError):
+    """Raised when a completed run is submitted again."""
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -84,6 +98,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             conversation_id TEXT NOT NULL,
+            run_id TEXT,
             role TEXT NOT NULL,
             created_at TEXT NOT NULL,
             payload_json TEXT NOT NULL,
@@ -93,6 +108,21 @@ def _create_schema(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_messages_conversation
             ON messages(conversation_id, id);
+
+        CREATE TABLE IF NOT EXISTS runs (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            request_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (conversation_id)
+                REFERENCES conversations(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_runs_conversation
+            ON runs(conversation_id, created_at);
 
         CREATE TABLE IF NOT EXISTS documents (
             id TEXT PRIMARY KEY,
@@ -113,6 +143,24 @@ def _create_schema(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_documents_conversation
             ON documents(conversation_id, created_at);
+        """
+    )
+
+    # Existing v0.3 databases predate run-aware messages. SQLite's
+    # CREATE TABLE IF NOT EXISTS does not add new columns, so migrate the
+    # table in place before creating the idempotency index.
+    message_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(messages)").fetchall()
+    }
+    if "run_id" not in message_columns:
+        connection.execute("ALTER TABLE messages ADD COLUMN run_id TEXT")
+
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_run_role
+        ON messages(conversation_id, run_id, role)
+        WHERE run_id IS NOT NULL
         """
     )
 
@@ -170,6 +218,18 @@ def _initialize_sync() -> None:
     with _connection() as connection:
         _create_schema(connection)
         _import_legacy_json(connection)
+        interrupted = {
+            "code": "process_restarted",
+            "message": "The application restarted before this run completed.",
+            "retryable": True,
+        }
+        connection.execute(
+            """
+            UPDATE runs SET status = 'failed', error_json = ?, updated_at = ?
+            WHERE status = 'running'
+            """,
+            (json.dumps(interrupted), _utc_now()),
+        )
         connection.commit()
 
 
@@ -292,6 +352,8 @@ async def delete_conversation(conversation_id: str) -> bool:
 def _insert_message_sync(
     conversation_id: str,
     message: Dict[str, Any],
+    run_id: Optional[str] = None,
+    upsert: bool = False,
 ) -> None:
     if not _is_valid_conversation_id(conversation_id):
         raise ValueError("Conversation id must be a UUID.")
@@ -302,19 +364,69 @@ def _insert_message_sync(
         )
         if cursor.fetchone() is None:
             raise ValueError(f"Conversation {conversation_id} not found")
-        connection.execute(
+        _write_message(connection, conversation_id, message, run_id, upsert)
+
+
+def _write_message(
+    connection: sqlite3.Connection,
+    conversation_id: str,
+    message: Dict[str, Any],
+    run_id: Optional[str] = None,
+    upsert: bool = False,
+) -> None:
+    """Insert a message or replace the one terminal message for a run."""
+
+    payload = dict(message)
+    if run_id:
+        payload["run_id"] = run_id
+
+    if run_id and upsert:
+        existing = connection.execute(
             """
-            INSERT INTO messages(
-                conversation_id, role, created_at, payload_json
-            ) VALUES (?, ?, ?, ?)
+            SELECT id FROM messages
+            WHERE conversation_id = ? AND run_id = ? AND role = ?
             """,
-            (
-                conversation_id,
-                message["role"],
-                _utc_now(),
-                json.dumps(message),
-            ),
-        )
+            (conversation_id, run_id, payload["role"]),
+        ).fetchone()
+        if existing is not None:
+            connection.execute(
+                """
+                UPDATE messages SET created_at = ?, payload_json = ?
+                WHERE id = ?
+                """,
+                (_utc_now(), json.dumps(payload), existing["id"]),
+            )
+            return
+
+    connection.execute(
+        """
+        INSERT INTO messages(
+            conversation_id, run_id, role, created_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            conversation_id,
+            run_id,
+            payload["role"],
+            _utc_now(),
+            json.dumps(payload),
+        ),
+    )
+
+
+def _document_message_metadata(
+    documents: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    return [
+        {
+            "id": document["id"],
+            "filename": document["filename"],
+            "character_count": document["character_count"],
+            "chunk_count": document.get("chunk_count"),
+            "truncated": bool(document.get("truncated")),
+        }
+        for document in documents or []
+    ]
 
 
 async def add_user_message(
@@ -325,14 +437,7 @@ async def add_user_message(
     await initialize()
     message: Dict[str, Any] = {"role": "user", "content": content}
     if documents:
-        message["documents"] = [
-            {
-                "id": document["id"],
-                "filename": document["filename"],
-                "character_count": document["character_count"],
-            }
-            for document in documents
-        ]
+        message["documents"] = _document_message_metadata(documents)
     await asyncio.to_thread(_insert_message_sync, conversation_id, message)
 
 
@@ -342,6 +447,7 @@ async def add_assistant_message(
     stage2: List[Dict[str, Any]],
     stage3: Dict[str, Any],
     metadata: Optional[Dict[str, Any]] = None,
+    run_id: Optional[str] = None,
 ) -> None:
     await initialize()
     message = {
@@ -351,7 +457,186 @@ async def add_assistant_message(
         "stage3": stage3,
         "metadata": metadata,
     }
-    await asyncio.to_thread(_insert_message_sync, conversation_id, message)
+    await asyncio.to_thread(
+        _insert_message_sync,
+        conversation_id,
+        message,
+        run_id,
+        bool(run_id),
+    )
+
+
+def _begin_run_sync(
+    conversation_id: str,
+    run_id: str,
+    request_payload: Dict[str, Any],
+    documents: Optional[List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    if not _is_valid_conversation_id(conversation_id):
+        raise ValueError("Conversation id must be a UUID.")
+    if not _is_valid_conversation_id(run_id):
+        raise ValueError("Run id must be a UUID.")
+
+    canonical_request = json.dumps(
+        request_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    now = _utc_now()
+    with _connection() as connection:
+        # Serialize the read/insert transition so two requests using the same
+        # run id cannot both observe a missing row and duplicate the turn.
+        connection.execute("BEGIN IMMEDIATE")
+        exists = connection.execute(
+            "SELECT 1 FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if exists is None:
+            raise ValueError(f"Conversation {conversation_id} not found")
+
+        run = connection.execute(
+            """
+            SELECT request_json, status FROM runs
+            WHERE id = ? AND conversation_id = ?
+            """,
+            (run_id, conversation_id),
+        ).fetchone()
+
+        resumed = False
+        if run is None:
+            connection.execute(
+                """
+                INSERT INTO runs(
+                    id, conversation_id, request_json, status,
+                    error_json, created_at, updated_at
+                ) VALUES (?, ?, ?, 'running', NULL, ?, ?)
+                """,
+                (run_id, conversation_id, canonical_request, now, now),
+            )
+            user_message: Dict[str, Any] = {
+                "role": "user",
+                "content": str(request_payload.get("content") or ""),
+            }
+            document_metadata = _document_message_metadata(documents)
+            if document_metadata:
+                user_message["documents"] = document_metadata
+            _write_message(
+                connection,
+                conversation_id,
+                user_message,
+                run_id,
+            )
+        else:
+            if run["request_json"] != canonical_request:
+                raise RunConflictError(
+                    "The run id is already associated with a different request."
+                )
+            if run["status"] == "completed":
+                raise RunAlreadyCompletedError("This run has already completed.")
+            if run["status"] == "running":
+                raise RunInProgressError("This run is already in progress.")
+            resumed = True
+            connection.execute(
+                """
+                UPDATE runs SET status = 'running', error_json = NULL,
+                    updated_at = ?
+                WHERE id = ? AND conversation_id = ?
+                """,
+                (now, run_id, conversation_id),
+            )
+
+    return {"id": run_id, "status": "running", "resumed": resumed}
+
+
+async def begin_run(
+    conversation_id: str,
+    run_id: str,
+    request_payload: Dict[str, Any],
+    documents: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Atomically start or resume a run without duplicating its user message."""
+
+    await initialize()
+    return await asyncio.to_thread(
+        _begin_run_sync,
+        conversation_id,
+        run_id,
+        request_payload,
+        documents,
+    )
+
+
+def _set_run_status_sync(
+    conversation_id: str,
+    run_id: str,
+    status: str,
+    error: Optional[Dict[str, Any]] = None,
+) -> None:
+    if status not in RUN_STATUSES:
+        raise ValueError(f"Unsupported run status: {status}")
+    with _connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE runs SET status = ?, error_json = ?, updated_at = ?
+            WHERE id = ? AND conversation_id = ?
+            """,
+            (
+                status,
+                json.dumps(error) if error else None,
+                _utc_now(),
+                run_id,
+                conversation_id,
+            ),
+        )
+    if cursor.rowcount != 1:
+        raise ValueError(f"Run {run_id} not found")
+
+
+async def set_run_status(
+    conversation_id: str,
+    run_id: str,
+    status: str,
+    error: Optional[Dict[str, Any]] = None,
+) -> None:
+    await initialize()
+    await asyncio.to_thread(
+        _set_run_status_sync,
+        conversation_id,
+        run_id,
+        status,
+        error,
+    )
+
+
+def _get_run_sync(
+    conversation_id: str,
+    run_id: str,
+) -> Optional[Dict[str, Any]]:
+    with _connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, conversation_id, status, error_json,
+                created_at, updated_at
+            FROM runs WHERE id = ? AND conversation_id = ?
+            """,
+            (run_id, conversation_id),
+        ).fetchone()
+    if row is None:
+        return None
+    result = dict(row)
+    try:
+        result["error"] = json.loads(result.pop("error_json"))
+    except (json.JSONDecodeError, TypeError):
+        result["error"] = None
+    return result
+
+
+async def get_run(
+    conversation_id: str,
+    run_id: str,
+) -> Optional[Dict[str, Any]]:
+    await initialize()
+    return await asyncio.to_thread(_get_run_sync, conversation_id, run_id)
 
 
 def _update_title_sync(conversation_id: str, title: str) -> None:

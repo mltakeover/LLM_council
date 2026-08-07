@@ -184,6 +184,7 @@ export const api = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          run_id: options.runId,
           content,
           models: options.models,
           chairman_model: options.chairmanModel,
@@ -217,6 +218,7 @@ export const api = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          run_id: options.runId,
           content,
           models: options.models,
           chairman_model: options.chairmanModel,

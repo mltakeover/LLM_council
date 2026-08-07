@@ -66,12 +66,8 @@ function ConversationItem({
 
   return (
     <div className={`conversation-item ${isActive ? 'active' : ''}`}>
-      <button
-        type="button"
-        className="conversation-select"
-        onClick={() => onSelect(conversation.id)}
-      >
-        {isRenaming ? (
+      {isRenaming ? (
+        <div className="conversation-select conversation-select--editing">
           <input
             type="text"
             className="conversation-rename-input"
@@ -82,15 +78,24 @@ function ConversationItem({
             onBlur={commitRename}
             onKeyDown={handleRenameKeyDown}
           />
-        ) : (
+          <span className="conversation-meta">
+            {conversation.message_count} messages
+          </span>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="conversation-select"
+          onClick={() => onSelect(conversation.id)}
+        >
           <span className="conversation-title">
             {conversation.title || 'New Conversation'}
           </span>
-        )}
-        <span className="conversation-meta">
-          {conversation.message_count} messages
-        </span>
-      </button>
+          <span className="conversation-meta">
+            {conversation.message_count} messages
+          </span>
+        </button>
+      )}
 
       {!isRenaming && (
         <div className="conversation-actions">
@@ -227,6 +232,9 @@ export default function Sidebar({
                   const selected = selectedModels.includes(model.id);
                   const onlySelected = selected && selectedModels.length === 1;
                   const size = formatBytes(model.size);
+                  const locationLabel = model.source === 'remote-ollama'
+                    ? 'Remote'
+                    : (model.is_local ? 'Local' : 'Cloud');
 
                   return (
                     <label
@@ -262,7 +270,7 @@ export default function Sidebar({
                           <span className={`location-pill ${
                             model.is_local ? 'local' : 'cloud'
                           }`}>
-                            {model.is_local ? 'Local' : 'Cloud'}
+                            {locationLabel}
                           </span>
                           {size && <span>{size}</span>}
                           {model.quantization && (

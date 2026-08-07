@@ -3,6 +3,8 @@ import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import CouncilFlow from './components/CouncilFlow';
 import { api } from './api';
+import { shortModelName } from './utils/modelDisplay';
+import { createRunId } from './utils/runId';
 import './App.css';
 
 
@@ -49,6 +51,7 @@ function App() {
   const [modelsLoading, setModelsLoading] = useState(true);
   const [modelError, setModelError] = useState(null);
   const [maxCouncilModels, setMaxCouncilModels] = useState(8);
+  const [titleModel, setTitleModel] = useState(null);
   const [reviewProfiles, setReviewProfiles] = useState([]);
   const [reviewProfile, setReviewProfile] = useState(
     localStorage.getItem(REVIEW_PROFILE_KEY) || 'general'
@@ -152,6 +155,7 @@ function App() {
       );
 
       setAvailableModels(catalog.models);
+      setTitleModel(catalog.title_model || null);
       setMaxCouncilModels(catalogMaxModels);
       setSelectedModels(finalModels);
       setChairmanModel(nextChairman);
@@ -197,6 +201,9 @@ function App() {
         ...previous,
       ]);
       setCurrentConversationId(newConversation.id);
+      setCurrentConversation(newConversation);
+      setCloudPrivacyConfirmed(false);
+      setLastFailedRequest(null);
       setCouncilProgress(
         createProgress(selectedModels, chairmanModel)
       );
@@ -208,6 +215,8 @@ function App() {
 
   const handleSelectConversation = (id) => {
     setCurrentConversationId(id);
+    setCloudPrivacyConfirmed(false);
+    setLastFailedRequest(null);
     setSidebarOpen(false);
   };
 
@@ -421,7 +430,11 @@ function App() {
     });
   };
 
-  const handleSendMessage = async (content, selectedDocuments = []) => {
+  const handleSendMessage = async (
+    content,
+    selectedDocuments = [],
+    existingRunId = null,
+  ) => {
     if (
       !currentConversationId
       || !currentConversation
@@ -430,6 +443,7 @@ function App() {
 
     const activeModels = [...selectedModels];
     const activeChairman = chairmanModel || activeModels[0];
+    const runId = existingRunId || createRunId();
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -442,9 +456,15 @@ function App() {
     );
 
     const documentIds = selectedDocuments.map((document) => document.id);
-    const userMessage = { role: 'user', content, documents: selectedDocuments };
+    const userMessage = {
+      role: 'user',
+      run_id: runId,
+      content,
+      documents: selectedDocuments,
+    };
     const assistantMessage = {
       role: 'assistant',
+      run_id: runId,
       stage1: null,
       stage2: null,
       stage3: null,
@@ -459,14 +479,28 @@ function App() {
     setCurrentConversation((previous) => {
       if (!previous) return previous;
 
-      return {
-        ...previous,
-        messages: [
-          ...previous.messages,
-          userMessage,
-          assistantMessage,
-        ],
-      };
+      const messages = [...previous.messages];
+      const userIndex = messages.findIndex((message) => (
+        message.role === 'user' && message.run_id === runId
+      ));
+      if (userIndex === -1) {
+        return {
+          ...previous,
+          messages: [...messages, userMessage, assistantMessage],
+        };
+      }
+
+      const assistantIndex = messages.findIndex((message, index) => (
+        index > userIndex
+        && message.role === 'assistant'
+        && message.run_id === runId
+      ));
+      if (assistantIndex === -1) {
+        messages.splice(userIndex + 1, 0, assistantMessage);
+      } else {
+        messages[assistantIndex] = assistantMessage;
+      }
+      return { ...previous, messages };
     });
 
     try {
@@ -474,6 +508,7 @@ function App() {
         currentConversationId,
         content,
         {
+          runId,
           models: activeModels,
           chairmanModel: activeChairman,
           reviewProfile,
@@ -605,6 +640,11 @@ function App() {
             }
 
             case 'title_complete':
+              setCurrentConversation((previous) => (
+                previous && event.data?.title
+                  ? { ...previous, title: event.data.title }
+                  : previous
+              ));
               loadConversations();
               break;
 
@@ -657,7 +697,7 @@ function App() {
                 },
               }));
               setModelError(streamError.message);
-              setLastFailedRequest({ content, selectedDocuments });
+              setLastFailedRequest({ content, selectedDocuments, runId });
               setIsLoading(false);
               break;
             }
@@ -716,7 +756,7 @@ function App() {
         }));
         setModelError(error.message);
       }
-      setLastFailedRequest({ content, selectedDocuments });
+      setLastFailedRequest({ content, selectedDocuments, runId });
       setIsLoading(false);
     } finally {
       abortControllerRef.current = null;
@@ -731,7 +771,11 @@ function App() {
     if (lastFailedRequest && !isLoading) {
       const request = lastFailedRequest;
       setLastFailedRequest(null);
-      handleSendMessage(request.content, request.selectedDocuments);
+      handleSendMessage(
+        request.content,
+        request.selectedDocuments,
+        request.runId,
+      );
     }
   };
 
@@ -739,7 +783,19 @@ function App() {
     selectedModels.includes(model.id)
   ));
   const cloudModels = selectedCatalogModels.filter((model) => !model.is_local);
-  const requiresCloudConfirmation = cloudModels.length > 0;
+  const titleRequiresCloudConfirmation = Boolean(
+    titleModel?.requires_cloud_confirmation
+    && currentConversation?.title === 'New Conversation'
+  );
+  const cloudModelNames = cloudModels.map((model) => model.name);
+  if (titleRequiresCloudConfirmation) {
+    cloudModelNames.push(
+      `${shortModelName(titleModel.id)} (conversation title only)`
+    );
+  }
+  const requiresCloudConfirmation = (
+    cloudModels.length > 0 || titleRequiresCloudConfirmation
+  );
 
   return (
     <div className="app">
@@ -803,7 +859,7 @@ function App() {
           reviewProfiles={reviewProfiles}
           includeContext={includeContext}
           requiresCloudConfirmation={requiresCloudConfirmation}
-          cloudModelNames={cloudModels.map((model) => model.name)}
+          cloudModelNames={cloudModelNames}
           cloudPrivacyConfirmed={cloudPrivacyConfirmed}
           onCloudPrivacyConfirmed={setCloudPrivacyConfirmed}
         />

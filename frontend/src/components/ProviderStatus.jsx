@@ -49,13 +49,16 @@ export default function ProviderStatus({ models, onClose, onRefresh }) {
         <div className="provider-status-list">
           {models.filter((model) => model.selectable).map((model) => {
             const result = results[model.id];
+            const locationLabel = model.source === 'remote-ollama'
+              ? 'Remote Ollama'
+              : (model.is_local ? 'Local' : 'Cloud');
             return (
               <article className="provider-status-card" key={model.id}>
                 <div className="provider-status-identity">
                   <span className={`provider-status-dot provider-status-dot--${result?.testing ? 'testing' : result?.ok === true ? 'ok' : result?.ok === false ? 'failed' : 'unknown'}`} />
                   <div>
                     <strong>{shortModelName(model.id)}</strong>
-                    <small>{providerName(model.id)} · {model.is_local ? 'Local' : 'Cloud'}</small>
+                    <small>{providerName(model.id)} · {locationLabel}</small>
                   </div>
                 </div>
                 <div className="provider-status-result">

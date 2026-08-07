@@ -19,6 +19,9 @@ export default function ConsensusPanel({ report, metrics }) {
   const percentage = metrics?.top_choice_share == null
     ? null
     : Math.round(metrics.top_choice_share * 100);
+  const tiedModels = (metrics?.tied_top_choice_models || [])
+    .map(shortModelName)
+    .filter(Boolean);
 
   return (
     <section className="consensus-panel" aria-labelledby="consensus-title">
@@ -31,8 +34,16 @@ export default function ConsensusPanel({ report, metrics }) {
           <strong>{agreementLabel(metrics?.agreement_level)}</strong>
           {percentage != null && (
             <span>
-              {metrics.top_choice_votes}/{metrics.valid_ranking_count} reviewers preferred{' '}
-              {shortModelName(metrics.top_choice_model) || 'the leading response'} ({percentage}%)
+              {tiedModels.length > 1 ? (
+                <>
+                  {metrics.top_choice_votes} vote(s) each for {tiedModels.join(', ')} ({percentage}%)
+                </>
+              ) : (
+                <>
+                  {metrics.top_choice_votes}/{metrics.valid_ranking_count} reviewers preferred{' '}
+                  {shortModelName(metrics.top_choice_model) || 'the leading response'} ({percentage}%)
+                </>
+              )}
             </span>
           )}
         </div>
