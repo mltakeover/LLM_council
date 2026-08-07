@@ -1,36 +1,46 @@
-# Secrets
+# Secrets and local environment configuration
 .env
 .env.*
 !.env.example
 
-# Local conversation data
+# Local application data
 data/conversations/
+data/*.db
+data/*.db-shm
+data/*.db-wal
 
-# Python
+# Python caches and build outputs
 __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 .venv/
 venv/
 build/
 dist/
-*conflicted copy*
-# Frontend
+
+# Frontend dependencies and build outputs
 frontend/node_modules/
 frontend/dist/
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# PyCharm and macOS
+# IDE settings
 .idea/
+.vscode/
+
+# macOS files
 .DS_Store
+**/.DS_Store
 
-# Downloaded update overlay — duplicates the project files
+# Dropbox conflicted copies
+*conflicted copy*
+
+# Downloaded update overlay — duplicates project files
 llm-council-dynamic-ollama-ui-update/
-
-# Local conversation data
-data/conversations/
-data/*.db
-data/*.db-shm
-data/*.db-wal
