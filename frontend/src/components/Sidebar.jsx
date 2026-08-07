@@ -134,12 +134,18 @@ export default function Sidebar({
   availableModels,
   selectedModels,
   chairmanModel,
+  councilModes,
+  councilMode,
   reviewProfiles,
   reviewProfile,
+  roleAssignments,
   includeContext,
   onToggleModel,
   onChairmanChange,
+  onCouncilModeChange,
   onReviewProfileChange,
+  onRoleAssignmentChange,
+  onResetRoles,
   onIncludeContextChange,
   onApplyPreset,
   onRefreshModels,
@@ -151,6 +157,11 @@ export default function Sidebar({
   const [modelsOpen, setModelsOpen] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [providerStatusOpen, setProviderStatusOpen] = useState(false);
+  const activeMode = councilModes.find((mode) => mode.id === councilMode);
+  const activeProfile = reviewProfiles.find((profile) => profile.id === reviewProfile);
+  const defaultRoles = councilMode === 'review'
+    ? (activeProfile?.reviewer_roles || activeMode?.default_roles || [])
+    : (activeMode?.default_roles || []);
 
   const filteredConversations = searchQuery.trim()
     ? conversations.filter((conversation) => (
@@ -165,7 +176,7 @@ export default function Sidebar({
       <div className="sidebar-header">
         <div className="sidebar-brand-row">
           <div>
-            <div className="sidebar-kicker">MULTI-MODEL REVIEW</div>
+            <div className="sidebar-kicker">MULTI-MODEL DELIBERATION</div>
             <h1>LLM Council</h1>
           </div>
           <span className="sidebar-live-dot" title="Local application" />
@@ -301,23 +312,78 @@ export default function Sidebar({
 
             <div className="review-settings">
               <label className="chairman-field">
-                <span>Review profile</span>
+                <span>Council mode</span>
                 <select
-                  value={reviewProfile}
-                  onChange={(event) => onReviewProfileChange(event.target.value)}
+                  value={councilMode}
+                  onChange={(event) => onCouncilModeChange(event.target.value)}
                   disabled={selectionDisabled}
                 >
-                  {reviewProfiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.name}
+                  {councilModes.map((mode) => (
+                    <option key={mode.id} value={mode.id}>
+                      {mode.name}
                     </option>
                   ))}
                 </select>
               </label>
               <p className="review-profile-description">
-                {reviewProfiles.find((profile) => profile.id === reviewProfile)?.description
-                  || 'Choose the perspective used by council members and the Chairman.'}
+                {activeMode?.description
+                  || 'Choose how the council should approach the next request.'}
               </p>
+
+              {(councilMode === 'review' || councilMode === 'auto') && (
+                <label className="chairman-field">
+                  <span>Review profile</span>
+                  <select
+                    value={reviewProfile}
+                    onChange={(event) => onReviewProfileChange(event.target.value)}
+                    disabled={selectionDisabled}
+                  >
+                    {reviewProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {(councilMode === 'review' || councilMode === 'auto') && (
+                <p className="review-profile-description">
+                  {activeProfile?.description
+                    || 'Choose the specialist perspective used when the request is a review.'}
+                </p>
+              )}
+
+              <div className="role-assignment-panel">
+                <div className="role-assignment-heading">
+                  <span>Member roles</span>
+                  <button
+                    type="button"
+                    onClick={onResetRoles}
+                    disabled={selectionDisabled || Object.keys(roleAssignments).length === 0}
+                  >
+                    Use defaults
+                  </button>
+                </div>
+                <small>
+                  Optional. Leave blank to use mode-specific roles automatically.
+                </small>
+                {selectedModels.map((modelId, index) => (
+                  <label className="role-assignment-field" key={modelId}>
+                    <span>{modelId.split(':').slice(1).join(':')}</span>
+                    <input
+                      type="text"
+                      maxLength={160}
+                      value={roleAssignments[modelId] || ''}
+                      placeholder={defaultRoles[index % Math.max(defaultRoles.length, 1)] || 'Independent council member'}
+                      onChange={(event) => (
+                        onRoleAssignmentChange(modelId, event.target.value)
+                      )}
+                      disabled={selectionDisabled}
+                    />
+                  </label>
+                ))}
+              </div>
+
               <label className="context-toggle">
                 <input
                   type="checkbox"
@@ -327,7 +393,7 @@ export default function Sidebar({
                 />
                 <span>
                   Use conversation context
-                  <small>Include recent messages in the next review</small>
+                  <small>Include recent messages in the next council run</small>
                 </span>
               </label>
             </div>
@@ -336,6 +402,8 @@ export default function Sidebar({
               models={availableModels}
               selectedModels={selectedModels}
               chairmanModel={chairmanModel}
+              councilMode={councilMode}
+              roleAssignments={roleAssignments}
               reviewProfile={reviewProfile}
               includeContext={includeContext}
               disabled={selectionDisabled}

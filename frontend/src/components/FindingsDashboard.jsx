@@ -44,7 +44,7 @@ export default function FindingsDashboard({ report }) {
     <section className="findings-dashboard" aria-labelledby="findings-dashboard-title">
       <header className="findings-dashboard-header">
         <div>
-          <span className="dashboard-kicker">STRUCTURED REVIEW</span>
+          <span className="dashboard-kicker">STRUCTURED FINDINGS</span>
           <h4 id="findings-dashboard-title">Findings dashboard</h4>
           <p>Filter and group the Chairman&apos;s evidence-backed findings.</p>
         </div>

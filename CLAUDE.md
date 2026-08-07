@@ -6,12 +6,18 @@ or operational behaviour changes.
 
 ## Product summary
 
-LLM Council is a personal, local-first technical review application. A turn has
-three stages:
+LLM Council is a personal, local-first, general-purpose deliberation application.
+A turn has three stages:
 
 1. selected council models independently answer;
 2. successful answers are anonymised and peer-ranked;
-3. the selected Chairman returns a structured report and Markdown rendering.
+3. the selected Chairman returns a mode-adaptive structured report and Markdown
+   rendering.
+
+The explicit modes are Ask, Review, Debate, Decide, Brainstorm, Compare, Plan,
+Summarise, and Fact-check. Auto resolves one of those modes locally from the
+request. Review profiles are optional specialist configuration, not the
+application's overall product boundary.
 
 It supports directly configured OpenAI, Anthropic, Google Gemini, and xAI APIs,
 plus dynamically discovered Ollama models. It does not use OpenRouter.
@@ -50,14 +56,18 @@ CI is defined in `.github/workflows/ci.yml` and runs without provider keys.
 - `backend/providers.py`: direct SDK adapters, Ollama discovery, concurrency,
   retries, normalized results/errors, and model progress callbacks.
 - `backend/council.py`: prompts, document map/reduce, anonymous ranking,
-  consensus metrics, structured Chairman reports, and model recommendations.
+  consensus metrics, adaptive Chairman reports, and model recommendations.
+- `backend/council_modes.py`: mode catalogue, deterministic Auto routing,
+  evaluation criteria, default roles, and custom role resolution.
+- `backend/evaluations.py`: deterministic general-purpose evaluation catalogue
+  and structured-output shape checks.
 - `backend/main.py`: FastAPI models/routes, privacy validation, SSE orchestration,
   run lifecycle, uploads, usage estimates, and cancellation.
 - `backend/storage.py`: SQLite schema/migrations, conversations, messages,
   documents, run idempotency, and one-time legacy JSON import.
 - `backend/documents.py`: bounded extraction and chunking for supported files.
-- `backend/review_profiles.py`: built-in General, HLD, LLD, Code, and Security
-  reviewer instructions.
+- `backend/review_profiles.py`: optional General, HLD, LLD, Code, and Security
+  instructions used only by Review mode.
 
 All backend imports are package-relative. Run with `python -m backend.main` or
 Uvicorn from the repository root; do not run `backend/main.py` directly.
@@ -71,8 +81,8 @@ Uvicorn from the repository root; do not run `backend/main.py` directly.
 - `src/components/ChatInterface.jsx`: composer, files, estimates, confirmation,
   retry/cancel, transcript, and exports.
 - `src/components/Stage1.jsx`, `Stage2.jsx`, `Stage3.jsx`: turn inspection.
-- `src/components/FindingsDashboard.jsx`, `ConsensusPanel.jsx`: structured
-  Chairman report views.
+- `src/components/AdaptiveReport.jsx`, `FindingsDashboard.jsx`, and
+  `ConsensusPanel.jsx`: mode-specific structured Chairman report views.
 - `src/components/Sidebar.jsx`, `CouncilPresets.jsx`, `ProviderStatus.jsx`:
   model configuration, presets, conversations, and connectivity checks.
 - `src/utils/exportConversation.js`: Markdown, DOCX, and PDF exports.
@@ -116,6 +126,23 @@ de-anonymise only through persisted `label_to_model` metadata for display and
 aggregation. Reject invalid rankings rather than re-parsing a deliberately
 empty `parsed_ranking`. Do not invent a single winner for tied top-choice votes.
 
+### Modes and roles
+
+The requested mode and resolved mode are different concepts. Preserve
+`requested_council_mode` in run metadata and store the resolved `council_mode`
+on the result. Auto routing must remain deterministic and local: it must not add
+an LLM call or transmit the request to another destination.
+
+Stage 1 and Stage 2 must use the same resolved mode. Mode-specific ranking
+criteria and Chairman output instructions must follow that mode. Specialist
+review-profile objectives and roles apply only when the resolved mode is
+Review. Custom roles are accepted only for selected model IDs, are length
+bounded, and are part of canonical run inputs so an idempotent retry cannot
+silently change perspectives.
+
+Fact-check mode has no live source retrieval. Prompts and schemas must permit
+`unverified` and must not turn missing evidence into confirmation.
+
 ### Context and documents
 
 Context includes prior user messages and Chairman responses only, newest within
@@ -133,7 +160,8 @@ Add regression coverage for behavioural changes. In particular preserve tests
 for structured retries, stream cancellation, run idempotency/conflicts,
 first-turn title privacy, remote Ollama classification, document truncation,
 ranking validation/ties, SQLite migration, SSE terminal errors, and frontend
-run ID/export helpers. Tests must not make real provider calls.
+run ID/export helpers. Preserve evaluation coverage for every explicit mode and
+legacy preset normalisation. Tests must not make real provider calls.
 
 Before handing off a change, run the complete backend and frontend commands
 listed above and report any check that could not run.

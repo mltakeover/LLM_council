@@ -33,6 +33,7 @@ export default function ChatInterface({
   onApplyRecommendation,
   selectedModels,
   chairmanModel,
+  councilMode,
   reviewProfile,
   reviewProfiles,
   includeContext,
@@ -107,6 +108,7 @@ export default function ChatInterface({
       try {
         const result = await api.recommendModels(
           trimmed,
+          councilMode,
           reviewProfile,
           controller.signal,
         );
@@ -124,7 +126,7 @@ export default function ChatInterface({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [input, isLoading, reviewProfile]);
+  }, [input, isLoading, councilMode, reviewProfile]);
 
   useEffect(() => {
     if (!conversation?.id || isLoading || (!input.trim() && selectedDocumentIds.length === 0)) {
@@ -140,6 +142,7 @@ export default function ChatInterface({
           {
             models: selectedModels,
             chairmanModel,
+            councilMode,
             reviewProfile,
             includeContext,
             documentIds: selectedDocumentIds,
@@ -163,6 +166,7 @@ export default function ChatInterface({
     selectedDocumentIds,
     selectedModels,
     chairmanModel,
+    councilMode,
     reviewProfile,
     includeContext,
     isLoading,
@@ -181,7 +185,7 @@ export default function ChatInterface({
     event.target.value = '';
     if (!conversation?.id || files.length === 0) return;
     if (selectedDocumentIds.length + files.length > MAX_SELECTED_DOCUMENTS) {
-      setDocumentError(`Select no more than ${MAX_SELECTED_DOCUMENTS} documents per review.`);
+      setDocumentError(`Select no more than ${MAX_SELECTED_DOCUMENTS} documents per request.`);
       return;
     }
 
@@ -217,7 +221,7 @@ export default function ChatInterface({
         return previous.filter((id) => id !== documentId);
       }
       if (previous.length >= MAX_SELECTED_DOCUMENTS) {
-        setDocumentError(`Select no more than ${MAX_SELECTED_DOCUMENTS} documents per review.`);
+        setDocumentError(`Select no more than ${MAX_SELECTED_DOCUMENTS} documents per request.`);
         return previous;
       }
       setDocumentError(null);
@@ -328,13 +332,18 @@ export default function ChatInterface({
                               key={document.id}
                               className={document.truncated ? 'truncated' : ''}
                               title={document.truncated
-                                ? 'This review used only the stored document chunks.'
+                                ? 'This request used only the stored document chunks.'
                                 : undefined}
                             >
                               {document.truncated ? '⚠' : '▤'} {document.filename}
                             </span>
                           ))}
                         </div>
+                      )}
+                      {msg.council_mode && (
+                        <span className="message-mode-badge">
+                          {msg.council_mode.replace('_', ' ')}
+                        </span>
                       )}
                     </div>
                   </div>
@@ -419,8 +428,11 @@ export default function ChatInterface({
             <strong>{recommendation.recommended.map(shortModelName).join(', ')}</strong>
             {' '}{recommendation.recommended.length === 1 ? 'has' : 'have'} ranked best
             for {recommendation.category} questions
-            {recommendation.review_profile && (
-              <> reviewed with{' '}
+            {recommendation.council_mode && (
+              <> in {recommendation.council_mode.replace('_', ' ')} mode</>
+            )}
+            {recommendation.council_mode === 'review' && recommendation.review_profile && (
+              <> using{' '}
                 {(reviewProfiles || []).find((profile) => (
                   profile.id === recommendation.review_profile
                 ))?.name || recommendation.review_profile}
@@ -469,6 +481,9 @@ export default function ChatInterface({
 
       <form className="input-form" onSubmit={handleSubmit}>
         <div className="composer-tools">
+          <span className="active-mode-badge">
+            Mode: {councilMode.replace('_', ' ')}
+          </span>
           <label className={`file-upload-button ${uploading ? 'disabled' : ''}`}>
             <input
               type="file"
@@ -483,7 +498,9 @@ export default function ChatInterface({
             <span className="usage-estimate" title={usageEstimate.caveat}>
               ≈ {usageEstimate.estimated_source_tokens.toLocaleString()} input tokens ·{' '}
               {usageEstimate.estimated_calls.total} model calls
-              {usageEstimate.chunked_review ? ' · chunked review' : ''}
+              {(usageEstimate.chunked_document_processing || usageEstimate.chunked_review)
+                ? ' · chunked documents'
+                : ''}
               {usageEstimate.truncated_document_count > 0
                 ? ` · ⚠ ${usageEstimate.truncated_document_count} truncated`
                 : ''}
@@ -507,7 +524,7 @@ export default function ChatInterface({
                     onClick={() => toggleDocument(document.id)}
                     disabled={isLoading}
                     title={`${document.character_count.toLocaleString()} characters · ${document.chunk_count} chunks${
-                      document.truncated ? ' · truncated to the configured review limit' : ''
+                      document.truncated ? ' · truncated to the configured processing limit' : ''
                     }`}
                   >
                     {selected ? '✓' : '○'} {document.truncated ? '⚠ ' : ''}{document.filename}
@@ -531,7 +548,7 @@ export default function ChatInterface({
             ⚠ {truncatedSelectedDocuments.length === 1
               ? truncatedSelectedDocuments[0].filename
               : `${truncatedSelectedDocuments.length} selected documents`}{' '}
-            exceeds the configured review limit. Only the stored chunks will be reviewed.
+            exceeds the configured processing limit. Only the stored chunks will be used.
           </div>
         )}
         {documentError && <div className="document-error" role="alert">{documentError}</div>}

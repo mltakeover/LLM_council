@@ -76,11 +76,15 @@ export const api = {
    * `signal` to cancel a stale in-flight request (e.g. the user kept
    * typing).
    */
-  async recommendModels(content, reviewProfile, signal) {
+  async recommendModels(content, councilMode, reviewProfile, signal) {
     const response = await fetch(`${API_BASE}/api/recommend-models`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, review_profile: reviewProfile }),
+      body: JSON.stringify({
+        content,
+        council_mode: councilMode,
+        review_profile: reviewProfile,
+      }),
       signal,
     });
     if (!response.ok) {
@@ -116,6 +120,14 @@ export const api = {
     const response = await fetch(`${API_BASE}/api/review-profiles`);
     if (!response.ok) {
       throw await responseError(response, 'Failed to load review profiles');
+    }
+    return response.json();
+  },
+
+  async getCouncilModes() {
+    const response = await fetch(`${API_BASE}/api/council-modes`);
+    if (!response.ok) {
+      throw await responseError(response, 'Failed to load council modes');
     }
     return response.json();
   },
@@ -164,6 +176,7 @@ export const api = {
           content,
           models: options.models,
           chairman_model: options.chairmanModel,
+          council_mode: options.councilMode,
           review_profile: options.reviewProfile,
           include_context: options.includeContext,
           document_ids: options.documentIds,
@@ -188,7 +201,9 @@ export const api = {
           content,
           models: options.models,
           chairman_model: options.chairmanModel,
+          council_mode: options.councilMode,
           review_profile: options.reviewProfile,
+          role_assignments: options.roleAssignments,
           include_context: options.includeContext,
           document_ids: options.documentIds,
           cloud_processing_confirmed: options.cloudProcessingConfirmed,
@@ -222,7 +237,9 @@ export const api = {
           content,
           models: options.models,
           chairman_model: options.chairmanModel,
+          council_mode: options.councilMode,
           review_profile: options.reviewProfile,
+          role_assignments: options.roleAssignments,
           include_context: options.includeContext,
           document_ids: options.documentIds,
           cloud_processing_confirmed: options.cloudProcessingConfirmed,

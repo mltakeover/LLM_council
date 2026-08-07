@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { shortModelName } from '../utils/modelDisplay';
+import { normalizeCouncilPreset } from '../utils/councilMode';
 import './CouncilPresets.css';
 
 const PRESETS_KEY = 'llm-council:presets';
@@ -9,12 +10,15 @@ function buildBuiltInPresets(models) {
   const cloud = models.filter((model) => model.selectable && !model.is_local).map((model) => model.id);
   const presets = [];
   if (local.length) {
-    presets.push({ id: 'built-in-local-code', name: 'Local Code Review', models: local.slice(0, 3), chairmanModel: local[0], reviewProfile: 'code', includeContext: true, builtIn: true });
-    presets.push({ id: 'built-in-local-hld', name: 'Local HLD Review', models: local.slice(0, 3), chairmanModel: local[0], reviewProfile: 'hld', includeContext: true, builtIn: true });
+    presets.push({ id: 'built-in-local-general', name: 'Local General Council', models: local.slice(0, 4), chairmanModel: local[0], councilMode: 'auto', reviewProfile: 'general', roleAssignments: {}, includeContext: true, builtIn: true });
+    presets.push({ id: 'built-in-local-decision', name: 'Local Decision Panel', models: local.slice(0, 4), chairmanModel: local[0], councilMode: 'decide', reviewProfile: 'general', roleAssignments: {}, includeContext: true, builtIn: true });
+    presets.push({ id: 'built-in-local-creative', name: 'Local Creative Studio', models: local.slice(0, 4), chairmanModel: local[0], councilMode: 'brainstorm', reviewProfile: 'general', roleAssignments: {}, includeContext: true, builtIn: true });
+    presets.push({ id: 'built-in-local-code', name: 'Local Code Review', models: local.slice(0, 4), chairmanModel: local[0], councilMode: 'review', reviewProfile: 'code', roleAssignments: {}, includeContext: true, builtIn: true });
   }
   if (cloud.length) {
     const hybridModels = [...local.slice(0, 2), ...cloud.slice(0, 2)];
-    presets.push({ id: 'built-in-hybrid-hld', name: 'Hybrid HLD Review', models: hybridModels, chairmanModel: cloud[0], reviewProfile: 'hld', includeContext: true, builtIn: true });
+    presets.push({ id: 'built-in-hybrid-general', name: 'Hybrid Deep Question', models: hybridModels, chairmanModel: cloud[0], councilMode: 'ask', reviewProfile: 'general', roleAssignments: {}, includeContext: true, builtIn: true });
+    presets.push({ id: 'built-in-hybrid-research', name: 'Hybrid Research Synthesis', models: hybridModels, chairmanModel: cloud[0], councilMode: 'summarize', reviewProfile: 'general', roleAssignments: {}, includeContext: true, builtIn: true });
   }
   return presets;
 }
@@ -22,13 +26,13 @@ function buildBuiltInPresets(models) {
 function readSavedPresets() {
   try {
     const value = JSON.parse(localStorage.getItem(PRESETS_KEY) || '[]');
-    return Array.isArray(value) ? value : [];
+    return Array.isArray(value) ? value.map(normalizeCouncilPreset) : [];
   } catch {
     return [];
   }
 }
 
-export default function CouncilPresets({ models, selectedModels, chairmanModel, reviewProfile, includeContext, disabled, onApply }) {
+export default function CouncilPresets({ models, selectedModels, chairmanModel, councilMode, roleAssignments, reviewProfile, includeContext, disabled, onApply }) {
   const [savedPresets, setSavedPresets] = useState(readSavedPresets);
   const [name, setName] = useState('');
   const builtIns = useMemo(() => buildBuiltInPresets(models), [models]);
@@ -44,6 +48,8 @@ export default function CouncilPresets({ models, selectedModels, chairmanModel, 
         name: trimmed,
         models: selectedModels,
         chairmanModel,
+        councilMode,
+        roleAssignments,
         reviewProfile,
         includeContext,
         builtIn: false,
@@ -63,14 +69,14 @@ export default function CouncilPresets({ models, selectedModels, chairmanModel, 
   return (
     <section className="council-presets">
       <div className="preset-heading">
-        <div><strong>Council presets</strong><small>Reuse a proven model and profile mix</small></div>
+        <div><strong>Council presets</strong><small>Reuse a model, mode, and role setup</small></div>
       </div>
       <div className="preset-list">
         {presets.map((preset) => (
           <div className="preset-card" key={preset.id}>
             <button type="button" onClick={() => onApply(preset)} disabled={disabled}>
               <strong>{preset.name}</strong>
-              <small>{preset.reviewProfile.toUpperCase()} · {preset.models.length} model{preset.models.length === 1 ? '' : 's'} · Chair: {shortModelName(preset.chairmanModel)}</small>
+              <small>{(preset.councilMode || 'auto').replace('_', ' ').toUpperCase()} · {preset.models.length} model{preset.models.length === 1 ? '' : 's'} · Chair: {shortModelName(preset.chairmanModel)}</small>
             </button>
             {!preset.builtIn && <button type="button" className="preset-delete" onClick={() => deletePreset(preset.id)} disabled={disabled} aria-label={`Delete ${preset.name}`}>×</button>}
           </div>

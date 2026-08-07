@@ -91,6 +91,9 @@ export default function Stage1({ responses }) {
               {duration && <span className="model-timing"> · {duration}</span>}
               {active.usage?.total_tokens && <span className="model-timing"> · {active.usage.total_tokens.toLocaleString()} tokens</span>}
             </div>
+            {(active.role || active.reviewer_role) && (
+              <div className="model-role">Perspective: {active.role || active.reviewer_role}</div>
+            )}
             <div className="response-text markdown-content">
               <Markdown>{active.response}</Markdown>
             </div>
@@ -104,7 +107,7 @@ export default function Stage1({ responses }) {
                 <span className={`tab-provider-dot tab-provider-dot--${providerSlug(response.model)}`} aria-hidden="true" />
                 <div>
                   <strong>{shortModelName(response.model)}</strong>
-                  <small>{response.reviewer_role || response.model}</small>
+                  <small>{response.role || response.reviewer_role || response.model}</small>
                 </div>
               </header>
               {responseMeta(response) && <div className="comparison-meta">{responseMeta(response)}</div>}

@@ -6,7 +6,7 @@ const PHASE_LABELS = {
   ready: 'Ready',
   connecting: 'Connecting',
   stage1: 'Collecting independent answers',
-  stage2: 'Peer review and ranking',
+  stage2: 'Peer evaluation and ranking',
   stage3: 'Chairman synthesis',
   complete: 'Council complete',
   error: 'Council stopped',
@@ -59,7 +59,7 @@ function RunDetails({ node, onClose }) {
     ? [{ key: 'stage3', label: 'Synthesis' }]
     : [
         { key: 'stage1', label: 'Independent answer' },
-        { key: 'stage2', label: 'Peer review' },
+        { key: 'stage2', label: 'Peer evaluation' },
       ];
 
   return (
@@ -147,7 +147,7 @@ function ModelNode({ model, selected, onSelect }) {
             error={model.errors?.stage1}
           />
           <StageStatus
-            label="Review"
+            label="Evaluate"
             status={model.stage2}
             attempts={model.attempts?.stage2}
             elapsed={model.elapsed?.stage2}

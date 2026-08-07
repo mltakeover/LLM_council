@@ -114,6 +114,13 @@
   font-family: monospace;
 }
 
+.model-role {
+  margin: -2px 0 12px;
+  color: #60718a;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
 .response-text {
   color: var(--color-text-secondary);
   line-height: 1.6;
