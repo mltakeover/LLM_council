@@ -105,3 +105,29 @@ def test_document_upload_and_usage_estimate(tmp_path) -> None:
         assert estimate.status_code == 200
         assert estimate.json()["document_count"] == 1
         assert estimate.json()["estimated_calls"]["total"] >= 2
+
+
+def test_model_connectivity_probe_returns_safe_metrics(monkeypatch) -> None:
+    async def catalog():
+        return {
+            "models": [{"id": "ollama:test", "selectable": True}],
+        }
+
+    async def query(_model, _messages, **_kwargs):
+        return {
+            "ok": True,
+            "elapsed_seconds": 0.25,
+            "attempts": 1,
+            "usage": {"input_tokens": 8, "output_tokens": 1, "total_tokens": 9},
+            "error": None,
+        }
+
+    monkeypatch.setattr(main, "get_models", catalog)
+    monkeypatch.setattr(main, "query_model", query)
+
+    with TestClient(main.app) as client:
+        response = client.post("/api/models/test", json={"model": "ollama:test"})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["usage"]["total_tokens"] == 9

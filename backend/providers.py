@@ -137,6 +137,40 @@ def _system_prompt(messages: List[Message]) -> str:
     )
 
 
+def _token_usage(
+    input_tokens: Any = None,
+    output_tokens: Any = None,
+    total_tokens: Any = None,
+) -> Dict[str, Optional[int]]:
+    """Normalize provider token counters for the API and live UI."""
+
+    def as_int(value: Any) -> Optional[int]:
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    input_count = as_int(input_tokens)
+    output_count = as_int(output_tokens)
+    total_count = as_int(total_tokens)
+    if total_count is None and input_count is not None and output_count is not None:
+        total_count = input_count + output_count
+    return {
+        "input_tokens": input_count,
+        "output_tokens": output_count,
+        "total_tokens": total_count,
+    }
+
+
+def _openai_token_usage(response: Any) -> Dict[str, Optional[int]]:
+    usage = getattr(response, "usage", None)
+    return _token_usage(
+        getattr(usage, "prompt_tokens", None),
+        getattr(usage, "completion_tokens", None),
+        getattr(usage, "total_tokens", None),
+    )
+
+
 async def _query_openai(
     model_name: str,
     messages: List[Message],
@@ -153,6 +187,7 @@ async def _query_openai(
     return {
         "content": response.choices[0].message.content or "",
         "reasoning_details": None,
+        "usage": _openai_token_usage(response),
     }
 
 
@@ -198,9 +233,14 @@ async def _query_anthropic(
         if getattr(block, "type", None) == "text"
     )
 
+    usage = getattr(response, "usage", None)
     return {
         "content": content,
         "reasoning_details": None,
+        "usage": _token_usage(
+            getattr(usage, "input_tokens", None),
+            getattr(usage, "output_tokens", None),
+        ),
     }
 
 
@@ -251,9 +291,15 @@ async def _query_google(
 
     response = await _google_client.aio.models.generate_content(**request)
 
+    usage_metadata = getattr(response, "usage_metadata", None)
     return {
         "content": response.text or "",
         "reasoning_details": None,
+        "usage": _token_usage(
+            getattr(usage_metadata, "prompt_token_count", None),
+            getattr(usage_metadata, "candidates_token_count", None),
+            getattr(usage_metadata, "total_token_count", None),
+        ),
     }
 
 
@@ -272,6 +318,7 @@ async def _query_xai(
     return {
         "content": response.choices[0].message.content or "",
         "reasoning_details": None,
+        "usage": _openai_token_usage(response),
     }
 
 
@@ -300,6 +347,7 @@ async def _query_ollama(
     return {
         "content": message.content or "",
         "reasoning_details": reasoning_details,
+        "usage": _openai_token_usage(response),
     }
 
 
@@ -406,6 +454,7 @@ async def query_model(
             "provider": None,
             "content": "",
             "reasoning_details": None,
+            "usage": None,
             "attempts": 0,
             "elapsed_seconds": 0.0,
             "error": error,
@@ -434,6 +483,7 @@ async def query_model(
             "provider": provider,
             "content": "",
             "reasoning_details": None,
+            "usage": None,
             "attempts": 0,
             "elapsed_seconds": 0.0,
             "error": error,
@@ -471,6 +521,7 @@ async def query_model(
                 "provider": provider,
                 "content": provider_result.get("content", ""),
                 "reasoning_details": provider_result.get("reasoning_details"),
+                "usage": provider_result.get("usage"),
                 "attempts": attempt,
                 "elapsed_seconds": round(time.monotonic() - started_at, 2),
                 "error": None,
@@ -529,6 +580,7 @@ async def query_model(
         "provider": provider,
         "content": "",
         "reasoning_details": None,
+        "usage": None,
         "attempts": attempts_made,
         "elapsed_seconds": round(time.monotonic() - started_at, 2),
         "error": last_error,

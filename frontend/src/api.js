@@ -100,6 +100,18 @@ export const api = {
     return response.json();
   },
 
+  async testModel(model) {
+    const response = await fetch(`${API_BASE}/api/models/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+    if (!response.ok) {
+      throw await responseError(response, 'Failed to test model');
+    }
+    return response.json();
+  },
+
   async getReviewProfiles() {
     const response = await fetch(`${API_BASE}/api/review-profiles`);
     if (!response.ok) {

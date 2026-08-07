@@ -16,7 +16,11 @@ async def test_query_model_retries_then_emits_completion(monkeypatch) -> None:
         calls += 1
         if calls == 1:
             raise httpx.ConnectError("temporary connection failure")
-        return {"content": "review complete", "reasoning_details": None}
+        return {
+            "content": "review complete",
+            "reasoning_details": None,
+            "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+        }
 
     async def capture(event):
         events.append(event)
@@ -34,6 +38,7 @@ async def test_query_model_retries_then_emits_completion(monkeypatch) -> None:
 
     assert result["ok"] is True
     assert result["attempts"] == 2
+    assert result["usage"]["total_tokens"] == 14
     assert [event["type"] for event in events] == [
         "model_started",
         "model_retrying",

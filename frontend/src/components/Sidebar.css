@@ -117,7 +117,13 @@
   margin-bottom: 8px;
 }
 
-.refresh-models-btn {
+.model-action-buttons {
+  display: flex;
+  gap: 5px;
+}
+
+.refresh-models-btn,
+.provider-status-btn {
   border: 1px solid #d0d5dd;
   border-radius: 6px;
   padding: 4px 8px;
@@ -128,12 +134,14 @@
   cursor: pointer;
 }
 
-.refresh-models-btn:hover:not(:disabled) {
+.refresh-models-btn:hover:not(:disabled),
+.provider-status-btn:hover:not(:disabled) {
   border-color: #84adff;
   color: #175cd3;
 }
 
-.refresh-models-btn:disabled {
+.refresh-models-btn:disabled,
+.provider-status-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }

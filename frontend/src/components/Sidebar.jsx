@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import CouncilPresets from './CouncilPresets';
+import ProviderStatus from './ProviderStatus';
 import './Sidebar.css';
 
 
@@ -134,6 +136,7 @@ export default function Sidebar({
   onChairmanChange,
   onReviewProfileChange,
   onIncludeContextChange,
+  onApplyPreset,
   onRefreshModels,
   modelsLoading,
   modelError,
@@ -142,6 +145,7 @@ export default function Sidebar({
 }) {
   const [modelsOpen, setModelsOpen] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [providerStatusOpen, setProviderStatusOpen] = useState(false);
 
   const filteredConversations = searchQuery.trim()
     ? conversations.filter((conversation) => (
@@ -190,14 +194,23 @@ export default function Sidebar({
           <div className="model-selector-body">
             <div className="model-selector-actions">
               <span>Choose members for the next question</span>
-              <button
-                type="button"
-                className="refresh-models-btn"
-                onClick={onRefreshModels}
-                disabled={modelsLoading || selectionDisabled}
-              >
-                {modelsLoading ? 'Scanning…' : 'Refresh'}
-              </button>
+              <div className="model-action-buttons">
+                <button
+                  type="button"
+                  className="provider-status-btn"
+                  onClick={() => setProviderStatusOpen(true)}
+                >
+                  Status
+                </button>
+                <button
+                  type="button"
+                  className="refresh-models-btn"
+                  onClick={onRefreshModels}
+                  disabled={modelsLoading || selectionDisabled}
+                >
+                  {modelsLoading ? 'Scanning…' : 'Refresh'}
+                </button>
+              </div>
             </div>
 
             {modelError && (
@@ -310,6 +323,16 @@ export default function Sidebar({
                 </span>
               </label>
             </div>
+
+            <CouncilPresets
+              models={availableModels}
+              selectedModels={selectedModels}
+              chairmanModel={chairmanModel}
+              reviewProfile={reviewProfile}
+              includeContext={includeContext}
+              disabled={selectionDisabled}
+              onApply={onApplyPreset}
+            />
           </div>
         )}
       </section>
@@ -351,6 +374,13 @@ export default function Sidebar({
           ))
         )}
       </nav>
+      {providerStatusOpen && (
+        <ProviderStatus
+          models={availableModels}
+          onRefresh={onRefreshModels}
+          onClose={() => setProviderStatusOpen(false)}
+        />
+      )}
     </aside>
   );
 }

@@ -21,6 +21,7 @@ function createProgress(models, chairmanModel, phase = 'ready') {
       stage2: 'pending',
       attempts: {},
       elapsed: {},
+      usage: {},
       errors: {},
     })),
     chairman: {
@@ -28,6 +29,7 @@ function createProgress(models, chairmanModel, phase = 'ready') {
       stage3: 'pending',
       attempts: {},
       elapsed: {},
+      usage: {},
       errors: {},
     },
     error: null,
@@ -318,6 +320,42 @@ function App() {
     localStorage.setItem(INCLUDE_CONTEXT_KEY, String(enabled));
   };
 
+  const handleApplyPreset = (preset) => {
+    if (isLoading) return;
+
+    const selectable = new Set(
+      availableModels.filter((model) => model.selectable).map((model) => model.id)
+    );
+    const nextModels = (preset.models || [])
+      .filter((model) => selectable.has(model))
+      .slice(0, maxCouncilModels);
+    if (nextModels.length === 0) {
+      setModelError('None of the models in this preset are currently available.');
+      return;
+    }
+
+    const nextChairman = nextModels.includes(preset.chairmanModel)
+      ? preset.chairmanModel
+      : nextModels[0];
+    const nextProfile = reviewProfiles.some((profile) => profile.id === preset.reviewProfile)
+      ? preset.reviewProfile
+      : 'general';
+    const nextContext = preset.includeContext !== false;
+
+    setSelectedModels(nextModels);
+    setChairmanModel(nextChairman);
+    setReviewProfile(nextProfile);
+    setIncludeContext(nextContext);
+    setCloudPrivacyConfirmed(false);
+    setModelError(null);
+    setCouncilProgress(createProgress(nextModels, nextChairman));
+
+    localStorage.setItem(SELECTED_MODELS_KEY, JSON.stringify(nextModels));
+    localStorage.setItem(CHAIRMAN_MODEL_KEY, nextChairman);
+    localStorage.setItem(REVIEW_PROFILE_KEY, nextProfile);
+    localStorage.setItem(INCLUDE_CONTEXT_KEY, String(nextContext));
+  };
+
   const updateLastAssistant = (updater) => {
     setCurrentConversation((previous) => {
       if (!previous || previous.messages.length === 0) return previous;
@@ -348,6 +386,7 @@ function App() {
       const details = {
         attempts: data.attempts || data.attempt,
         elapsed: data.elapsed_seconds,
+        usage: data.usage,
         error: data.error,
       };
       if (stage === 'stage3') {
@@ -359,6 +398,7 @@ function App() {
             stage3: status,
             attempts: { ...previous.chairman.attempts, stage3: details.attempts },
             elapsed: { ...previous.chairman.elapsed, stage3: details.elapsed },
+            usage: { ...previous.chairman.usage, stage3: details.usage },
             errors: { ...previous.chairman.errors, stage3: details.error },
           },
         };
@@ -372,6 +412,7 @@ function App() {
                 [stage]: status,
                 attempts: { ...model.attempts, [stage]: details.attempts },
                 elapsed: { ...model.elapsed, [stage]: details.elapsed },
+                usage: { ...model.usage, [stage]: details.usage },
                 errors: { ...model.errors, [stage]: details.error },
               }
             : model
@@ -737,6 +778,7 @@ function App() {
         onChairmanChange={handleChairmanChange}
         onReviewProfileChange={handleReviewProfileChange}
         onIncludeContextChange={handleIncludeContextChange}
+        onApplyPreset={handleApplyPreset}
         onRefreshModels={loadModels}
         modelsLoading={modelsLoading}
         modelError={modelError}

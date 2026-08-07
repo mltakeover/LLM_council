@@ -1,0 +1,18 @@
+.council-presets { margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--color-border); }
+.preset-heading strong, .preset-heading small { display: block; }
+.preset-heading strong { color: var(--color-text-secondary); font-size: 12px; }
+.preset-heading small { margin-top: 2px; color: var(--color-text-quaternary); font-size: 10px; }
+.preset-list { margin-top: 8px; display: grid; gap: 6px; }
+.preset-list > p { margin: 0; color: var(--color-text-quaternary); font-size: 10px; }
+.preset-card { display: flex; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); overflow: hidden; }
+.preset-card > button:first-child { min-width: 0; flex: 1; padding: 8px; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.preset-card > button:first-child:hover { background: var(--color-primary-50); }
+.preset-card strong, .preset-card small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-card strong { color: var(--color-text-secondary); font-size: 10px; }
+.preset-card small { margin-top: 2px; color: var(--color-text-quaternary); font-size: 8px; }
+.preset-delete { width: 28px; border: 0; border-left: 1px solid var(--color-border); background: transparent; color: var(--color-text-quaternary); cursor: pointer; }
+.preset-delete:hover { background: var(--color-danger-100); color: var(--color-danger-600); }
+.preset-save-row { margin-top: 8px; display: flex; gap: 6px; }
+.preset-save-row input { min-width: 0; flex: 1; padding: 7px; border: 1px solid var(--color-border-strong); border-radius: 7px; background: var(--color-surface); font-size: 10px; }
+.preset-save-row button { padding: 7px 9px; border: 1px solid var(--color-primary-600); border-radius: 7px; background: var(--color-primary-600); color: #fff; cursor: pointer; font-size: 9px; font-weight: 700; }
+.preset-save-row button:disabled, .preset-card button:disabled { cursor: not-allowed; opacity: .55; }
