@@ -127,8 +127,13 @@ export default function Sidebar({
   availableModels,
   selectedModels,
   chairmanModel,
+  reviewProfiles,
+  reviewProfile,
+  includeContext,
   onToggleModel,
   onChairmanChange,
+  onReviewProfileChange,
+  onIncludeContextChange,
   onRefreshModels,
   modelsLoading,
   modelError,
@@ -272,6 +277,39 @@ export default function Sidebar({
                 ))}
               </select>
             </label>
+
+            <div className="review-settings">
+              <label className="chairman-field">
+                <span>Review profile</span>
+                <select
+                  value={reviewProfile}
+                  onChange={(event) => onReviewProfileChange(event.target.value)}
+                  disabled={selectionDisabled}
+                >
+                  {reviewProfiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="review-profile-description">
+                {reviewProfiles.find((profile) => profile.id === reviewProfile)?.description
+                  || 'Choose the perspective used by council members and the Chairman.'}
+              </p>
+              <label className="context-toggle">
+                <input
+                  type="checkbox"
+                  checked={includeContext}
+                  onChange={(event) => onIncludeContextChange(event.target.checked)}
+                  disabled={selectionDisabled}
+                />
+                <span>
+                  Use conversation context
+                  <small>Include recent messages in the next review</small>
+                </span>
+              </label>
+            </div>
           </div>
         )}
       </section>

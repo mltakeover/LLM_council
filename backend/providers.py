@@ -1,14 +1,16 @@
 """Direct clients for cloud LLM providers and local Ollama models."""
 
 import asyncio
+import logging
+import random
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
+import httpx
 from anthropic import AsyncAnthropic
 from google import genai
 from google.genai import types
-import httpx
 from openai import AsyncOpenAI
 
 from .config import (
@@ -17,12 +19,17 @@ from .config import (
     OLLAMA_BASE_URL,
     OLLAMA_DISCOVERY_TIMEOUT,
     OLLAMA_MAX_CONCURRENCY,
+    PROVIDER_MAX_ATTEMPTS,
+    PROVIDER_RETRY_BASE_SECONDS,
+    PROVIDER_RETRY_MAX_SECONDS,
     REQUEST_TIMEOUT,
 )
 
-
 Message = Dict[str, str]
 ModelResult = Dict[str, Any]
+EventCallback = Callable[[Dict[str, Any]], Awaitable[None]]
+
+logger = logging.getLogger(__name__)
 
 
 _openai_client = (
@@ -296,60 +303,262 @@ async def _query_ollama(
     }
 
 
+async def _emit(
+    callback: Optional[EventCallback],
+    event_type: str,
+    data: Dict[str, Any],
+) -> None:
+    if callback is not None:
+        await callback({"type": event_type, "data": data})
+
+
+def _status_code(exc: Exception) -> Optional[int]:
+    value = getattr(exc, "status_code", None)
+    if value is None:
+        response = getattr(exc, "response", None)
+        value = getattr(response, "status_code", None)
+
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _error_details(exc: Exception) -> Dict[str, Any]:
+    status_code = _status_code(exc)
+    exception_name = type(exc).__name__
+    lowered_name = exception_name.lower()
+
+    if isinstance(exc, (asyncio.TimeoutError, httpx.TimeoutException)):
+        code = "timeout"
+        retryable = True
+    elif status_code == 429:
+        code = "rate_limit"
+        retryable = True
+    elif status_code in {500, 502, 503, 504}:
+        code = "provider_unavailable"
+        retryable = True
+    elif status_code in {401, 403}:
+        code = "authentication"
+        retryable = False
+    elif status_code == 404:
+        code = "model_not_found"
+        retryable = False
+    elif status_code == 400:
+        code = "invalid_request"
+        retryable = False
+    elif (
+        isinstance(exc, (httpx.NetworkError, ConnectionError, OSError))
+        or "connection" in lowered_name
+    ):
+        code = "connection"
+        retryable = True
+    elif isinstance(exc, ValueError):
+        code = "configuration"
+        retryable = False
+    else:
+        code = "provider_error"
+        retryable = False
+
+    message = " ".join(str(exc).split())[:500]
+    if not message:
+        message = exception_name
+
+    return {
+        "code": code,
+        "message": message,
+        "retryable": retryable,
+        "status_code": status_code,
+        "exception_type": exception_name,
+    }
+
+
+def _retry_delay(attempt: int) -> float:
+    base = PROVIDER_RETRY_BASE_SECONDS * (2 ** max(0, attempt - 1))
+    capped = min(base, PROVIDER_RETRY_MAX_SECONDS)
+    return round(capped + random.uniform(0, capped * 0.2), 3)
+
+
 async def query_model(
     model: str,
     messages: List[Message],
     timeout: float = REQUEST_TIMEOUT,
-) -> Optional[ModelResult]:
-    """Query one directly configured cloud or local provider."""
+    event_callback: Optional[EventCallback] = None,
+    stage: Optional[str] = None,
+) -> ModelResult:
+    """Query one provider and always return a structured success/failure."""
 
-    start_time = time.monotonic()
+    started_at = time.monotonic()
+    stage_name = stage or "provider"
+    await _emit(
+        event_callback,
+        "model_started",
+        {"model": model, "stage": stage_name},
+    )
 
     try:
         provider, model_name = _split_model_id(model)
-        handlers = {
-            "openai": _query_openai,
-            "anthropic": _query_anthropic,
-            "google": _query_google,
-            "xai": _query_xai,
-            "ollama": _query_ollama,
+    except Exception as exc:
+        error = _error_details(exc)
+        result = {
+            "ok": False,
+            "model": model,
+            "provider": None,
+            "content": "",
+            "reasoning_details": None,
+            "attempts": 0,
+            "elapsed_seconds": 0.0,
+            "error": error,
         }
-        handler = handlers.get(provider)
-
-        if handler is None:
-            raise ValueError(f"Unsupported provider: {provider}")
-
-        result = await asyncio.wait_for(
-            handler(model_name, messages),
-            timeout=timeout,
+        await _emit(
+            event_callback,
+            "model_failed",
+            {"model": model, "stage": stage_name, **result},
         )
-
-        if not result.get("content", "").strip():
-            print(f"Provider returned no text: {model}")
-            return None
-
-        result["elapsed_seconds"] = round(time.monotonic() - start_time, 2)
         return result
 
-    except asyncio.TimeoutError:
-        print(f"Timeout querying {model} after {timeout} seconds")
-        return None
-    except Exception as exc:
-        print(
-            f"Error querying {model}: "
-            f"{type(exc).__name__}: {exc}"
+    handlers = {
+        "openai": _query_openai,
+        "anthropic": _query_anthropic,
+        "google": _query_google,
+        "xai": _query_xai,
+        "ollama": _query_ollama,
+    }
+    handler = handlers.get(provider)
+
+    if handler is None:
+        error = _error_details(ValueError(f"Unsupported provider: {provider}"))
+        result = {
+            "ok": False,
+            "model": model,
+            "provider": provider,
+            "content": "",
+            "reasoning_details": None,
+            "attempts": 0,
+            "elapsed_seconds": 0.0,
+            "error": error,
+        }
+        await _emit(
+            event_callback,
+            "model_failed",
+            {"model": model, "stage": stage_name, **result},
         )
-        return None
+        return result
+
+    last_error: Dict[str, Any] = {
+        "code": "provider_error",
+        "message": "Provider request failed.",
+        "retryable": False,
+        "status_code": None,
+        "exception_type": "UnknownError",
+    }
+
+    attempts_made = 0
+    for attempt in range(1, PROVIDER_MAX_ATTEMPTS + 1):
+        attempts_made = attempt
+        try:
+            provider_result = await asyncio.wait_for(
+                handler(model_name, messages),
+                timeout=timeout,
+            )
+
+            if not provider_result.get("content", "").strip():
+                raise RuntimeError("Provider returned an empty response.")
+
+            result = {
+                "ok": True,
+                "model": model,
+                "provider": provider,
+                "content": provider_result.get("content", ""),
+                "reasoning_details": provider_result.get("reasoning_details"),
+                "attempts": attempt,
+                "elapsed_seconds": round(time.monotonic() - started_at, 2),
+                "error": None,
+            }
+            await _emit(
+                event_callback,
+                "model_completed",
+                {"model": model, "stage": stage_name, **result},
+            )
+            return result
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            last_error = _error_details(exc)
+            if str(exc) == "Provider returned an empty response.":
+                last_error["code"] = "empty_response"
+                last_error["retryable"] = True
+
+            logger.warning(
+                "Provider call failed model=%s stage=%s attempt=%s/%s "
+                "code=%s status=%s error=%s",
+                model,
+                stage_name,
+                attempt,
+                PROVIDER_MAX_ATTEMPTS,
+                last_error["code"],
+                last_error["status_code"],
+                last_error["message"],
+            )
+
+            can_retry = (
+                last_error["retryable"]
+                and attempt < PROVIDER_MAX_ATTEMPTS
+            )
+            if not can_retry:
+                break
+
+            delay = _retry_delay(attempt)
+            await _emit(
+                event_callback,
+                "model_retrying",
+                {
+                    "model": model,
+                    "stage": stage_name,
+                    "attempt": attempt + 1,
+                    "delay_seconds": delay,
+                    "error": last_error,
+                },
+            )
+            await asyncio.sleep(delay)
+
+    result = {
+        "ok": False,
+        "model": model,
+        "provider": provider,
+        "content": "",
+        "reasoning_details": None,
+        "attempts": attempts_made,
+        "elapsed_seconds": round(time.monotonic() - started_at, 2),
+        "error": last_error,
+    }
+    await _emit(
+        event_callback,
+        "model_failed",
+        {"model": model, "stage": stage_name, **result},
+    )
+    return result
 
 
 async def query_models_parallel(
     models: List[str],
     messages: List[Message],
-) -> Dict[str, Optional[ModelResult]]:
+    event_callback: Optional[EventCallback] = None,
+    stage: Optional[str] = None,
+    messages_by_model: Optional[Dict[str, List[Message]]] = None,
+) -> Dict[str, ModelResult]:
     """Query all council members concurrently."""
 
     responses = await asyncio.gather(
-        *[query_model(model, messages) for model in models]
+        *[
+            query_model(
+                model,
+                (messages_by_model or {}).get(model, messages),
+                event_callback=event_callback,
+                stage=stage,
+            )
+            for model in models
+        ]
     )
-    return dict(zip(models, responses))
-
+    return dict(zip(models, responses, strict=True))

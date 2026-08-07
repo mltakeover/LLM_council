@@ -8,6 +8,8 @@ import './App.css';
 
 const SELECTED_MODELS_KEY = 'llm-council:selected-models';
 const CHAIRMAN_MODEL_KEY = 'llm-council:chairman-model';
+const REVIEW_PROFILE_KEY = 'llm-council:review-profile';
+const INCLUDE_CONTEXT_KEY = 'llm-council:include-context';
 
 
 function createProgress(models, chairmanModel, phase = 'ready') {
@@ -17,10 +19,16 @@ function createProgress(models, chairmanModel, phase = 'ready') {
       id,
       stage1: 'pending',
       stage2: 'pending',
+      attempts: {},
+      elapsed: {},
+      errors: {},
     })),
     chairman: {
       id: chairmanModel,
       stage3: 'pending',
+      attempts: {},
+      elapsed: {},
+      errors: {},
     },
     error: null,
   };
@@ -38,17 +46,29 @@ function App() {
   const [chairmanModel, setChairmanModel] = useState(null);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [modelError, setModelError] = useState(null);
+  const [maxCouncilModels, setMaxCouncilModels] = useState(8);
+  const [reviewProfiles, setReviewProfiles] = useState([]);
+  const [reviewProfile, setReviewProfile] = useState(
+    localStorage.getItem(REVIEW_PROFILE_KEY) || 'general'
+  );
+  const [includeContext, setIncludeContext] = useState(
+    localStorage.getItem(INCLUDE_CONTEXT_KEY) !== 'false'
+  );
+  const [cloudPrivacyConfirmed, setCloudPrivacyConfirmed] = useState(false);
   const [councilProgress, setCouncilProgress] = useState(
     createProgress([], null)
   );
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [lastFailedContent, setLastFailedContent] = useState(null);
+  const [lastFailedRequest, setLastFailedRequest] = useState(null);
 
   const abortControllerRef = useRef(null);
 
   useEffect(() => {
     loadConversations();
     loadModels();
+    loadReviewProfiles();
+    // Bootstrap once; refresh actions call the same loaders explicitly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -65,6 +85,24 @@ function App() {
     }
   };
 
+  const loadReviewProfiles = async () => {
+    try {
+      const payload = await api.getReviewProfiles();
+      const profiles = payload.profiles || [];
+      setReviewProfiles(profiles);
+      if (!profiles.some((profile) => profile.id === reviewProfile)) {
+        const fallback = profiles[0]?.id || 'general';
+        setReviewProfile(fallback);
+        localStorage.setItem(REVIEW_PROFILE_KEY, fallback);
+      }
+    } catch (error) {
+      console.error('Failed to load review profiles:', error);
+      setReviewProfiles([
+        { id: 'general', name: 'General review', description: 'Balanced review across quality, risk, and implementation.' },
+      ]);
+    }
+  };
+
   const loadModels = async () => {
     setModelsLoading(true);
     setModelError(null);
@@ -75,6 +113,7 @@ function App() {
         .filter((model) => model.selectable)
         .map((model) => model.id);
       const selectableSet = new Set(selectableIds);
+      const catalogMaxModels = catalog.limits?.max_council_models || 8;
 
       let savedModels = [];
       try {
@@ -86,7 +125,9 @@ function App() {
       }
 
       const restoredModels = Array.isArray(savedModels)
-        ? savedModels.filter((model) => selectableSet.has(model))
+        ? savedModels
+            .filter((model) => selectableSet.has(model))
+            .slice(0, catalogMaxModels)
         : [];
 
       const nextModels = restoredModels.length > 0
@@ -109,6 +150,7 @@ function App() {
       );
 
       setAvailableModels(catalog.models);
+      setMaxCouncilModels(catalogMaxModels);
       setSelectedModels(finalModels);
       setChairmanModel(nextChairman);
       setCouncilProgress(createProgress(finalModels, nextChairman));
@@ -204,7 +246,9 @@ function App() {
     const selectableIds = new Set(
       availableModels.filter((model) => model.selectable).map((model) => model.id)
     );
-    const applicable = modelIds.filter((id) => selectableIds.has(id));
+    const applicable = modelIds
+      .filter((id) => selectableIds.has(id))
+      .slice(0, maxCouncilModels);
     if (applicable.length === 0) return;
 
     let nextChairman = chairmanModel;
@@ -215,6 +259,7 @@ function App() {
     }
 
     setSelectedModels(applicable);
+    setCloudPrivacyConfirmed(false);
     localStorage.setItem(SELECTED_MODELS_KEY, JSON.stringify(applicable));
     setCouncilProgress(createProgress(applicable, nextChairman));
   };
@@ -222,9 +267,14 @@ function App() {
   const handleToggleModel = (modelId) => {
     if (isLoading) return;
 
+    setCloudPrivacyConfirmed(false);
     setSelectedModels((previous) => {
       const isSelected = previous.includes(modelId);
       if (isSelected && previous.length === 1) {
+        return previous;
+      }
+      if (!isSelected && previous.length >= maxCouncilModels) {
+        setModelError(`Select no more than ${maxCouncilModels} council models.`);
         return previous;
       }
 
@@ -242,6 +292,7 @@ function App() {
       }
 
       localStorage.setItem(SELECTED_MODELS_KEY, JSON.stringify(next));
+      setModelError(null);
       setCouncilProgress(createProgress(next, nextChairman));
       return next;
     });
@@ -253,6 +304,18 @@ function App() {
     setChairmanModel(modelId);
     localStorage.setItem(CHAIRMAN_MODEL_KEY, modelId);
     setCouncilProgress(createProgress(selectedModels, modelId));
+  };
+
+  const handleReviewProfileChange = (profileId) => {
+    if (isLoading) return;
+    setReviewProfile(profileId);
+    localStorage.setItem(REVIEW_PROFILE_KEY, profileId);
+  };
+
+  const handleIncludeContextChange = (enabled) => {
+    if (isLoading) return;
+    setIncludeContext(enabled);
+    localStorage.setItem(INCLUDE_CONTEXT_KEY, String(enabled));
   };
 
   const updateLastAssistant = (updater) => {
@@ -270,7 +333,54 @@ function App() {
     });
   };
 
-  const handleSendMessage = async (content) => {
+  const applyModelEvent = (eventType, data = {}) => {
+    const statusByEvent = {
+      model_started: 'active',
+      model_retrying: 'retrying',
+      model_completed: 'complete',
+      model_failed: 'failed',
+    };
+    const status = statusByEvent[eventType];
+    const stage = data.stage;
+    if (!status || !stage || !data.model) return;
+
+    setCouncilProgress((previous) => {
+      const details = {
+        attempts: data.attempts || data.attempt,
+        elapsed: data.elapsed_seconds,
+        error: data.error,
+      };
+      if (stage === 'stage3') {
+        return {
+          ...previous,
+          chairman: {
+            ...previous.chairman,
+            id: data.model,
+            stage3: status,
+            attempts: { ...previous.chairman.attempts, stage3: details.attempts },
+            elapsed: { ...previous.chairman.elapsed, stage3: details.elapsed },
+            errors: { ...previous.chairman.errors, stage3: details.error },
+          },
+        };
+      }
+      return {
+        ...previous,
+        models: previous.models.map((model) => (
+          model.id === data.model
+            ? {
+                ...model,
+                [stage]: status,
+                attempts: { ...model.attempts, [stage]: details.attempts },
+                elapsed: { ...model.elapsed, [stage]: details.elapsed },
+                errors: { ...model.errors, [stage]: details.error },
+              }
+            : model
+        )),
+      };
+    });
+  };
+
+  const handleSendMessage = async (content, selectedDocuments = []) => {
     if (
       !currentConversationId
       || !currentConversation
@@ -285,12 +395,13 @@ function App() {
 
     setIsLoading(true);
     setModelError(null);
-    setLastFailedContent(null);
+    setLastFailedRequest(null);
     setCouncilProgress(
       createProgress(activeModels, activeChairman, 'connecting')
     );
 
-    const userMessage = { role: 'user', content };
+    const documentIds = selectedDocuments.map((document) => document.id);
+    const userMessage = { role: 'user', content, documents: selectedDocuments };
     const assistantMessage = {
       role: 'assistant',
       stage1: null,
@@ -324,6 +435,10 @@ function App() {
         {
           models: activeModels,
           chairmanModel: activeChairman,
+          reviewProfile,
+          includeContext,
+          documentIds,
+          cloudProcessingConfirmed: cloudPrivacyConfirmed,
           signal: controller.signal,
         },
         (eventType, event) => {
@@ -347,11 +462,14 @@ function App() {
               setCouncilProgress((previous) => ({
                 ...previous,
                 phase: 'stage1',
-                models: previous.models.map((model) => ({
-                  ...model,
-                  stage1: 'active',
-                })),
               }));
+              break;
+
+            case 'model_started':
+            case 'model_retrying':
+            case 'model_completed':
+            case 'model_failed':
+              applyModelEvent(eventType, event.data);
               break;
 
             case 'stage1_complete': {
@@ -383,10 +501,6 @@ function App() {
               setCouncilProgress((previous) => ({
                 ...previous,
                 phase: 'stage2',
-                models: previous.models.map((model) => ({
-                  ...model,
-                  stage2: 'active',
-                })),
               }));
               break;
 
@@ -394,6 +508,7 @@ function App() {
               const successful = new Set(
                 (event.data || []).map((result) => result.model)
               );
+              const stageSkipped = event.metadata?.stage2_skipped;
               updateLastAssistant((message) => ({
                 ...message,
                 stage2: event.data,
@@ -404,9 +519,9 @@ function App() {
                 ...previous,
                 models: previous.models.map((model) => ({
                   ...model,
-                  stage2: successful.has(model.id)
-                    ? 'complete'
-                    : 'failed',
+                  stage2: stageSkipped
+                    ? 'skipped'
+                    : (successful.has(model.id) ? 'complete' : 'failed'),
                 })),
               }));
               break;
@@ -421,14 +536,18 @@ function App() {
                 ...previous,
                 phase: 'stage3',
                 chairman: {
+                  ...previous.chairman,
                   id: event.data?.chairman_model || previous.chairman.id,
-                  stage3: 'active',
+                  stage3: previous.chairman.stage3,
                 },
               }));
               break;
 
             case 'stage3_complete': {
-              const failed = event.data?.response?.startsWith('Error:');
+              const failed = (
+                event.data?.success === false
+                || event.data?.response?.startsWith('Error:')
+              );
               updateLastAssistant((message) => ({
                 ...message,
                 stage3: event.data,
@@ -454,36 +573,53 @@ function App() {
                 phase: 'complete',
               }));
               loadConversations();
-              setLastFailedContent(null);
+              setLastFailedRequest(null);
+              setCloudPrivacyConfirmed(false);
               setIsLoading(false);
               break;
 
-            case 'error':
-              console.error('Stream error:', event.message);
+            case 'error': {
+              const streamError = event.error || {
+                code: 'stream_error',
+                message: event.message || 'The council stream stopped.',
+                retryable: true,
+              };
+              console.error('Stream error:', streamError);
+              updateLastAssistant((message) => ({
+                ...message,
+                stage3: {
+                  model: 'error',
+                  response: streamError.message,
+                  success: false,
+                  error: streamError,
+                },
+                loading: { stage1: false, stage2: false, stage3: false },
+              }));
               setCouncilProgress((previous) => ({
                 ...previous,
                 phase: 'error',
-                error: event.message,
+                error: streamError.message,
                 models: previous.models.map((model) => ({
                   ...model,
-                  stage1: model.stage1 === 'active'
+                  stage1: ['active', 'retrying'].includes(model.stage1)
                     ? 'failed'
                     : model.stage1,
-                  stage2: model.stage2 === 'active'
+                  stage2: ['active', 'retrying'].includes(model.stage2)
                     ? 'failed'
                     : model.stage2,
                 })),
                 chairman: {
                   ...previous.chairman,
-                  stage3: previous.chairman.stage3 === 'active'
+                  stage3: ['active', 'retrying'].includes(previous.chairman.stage3)
                     ? 'failed'
                     : previous.chairman.stage3,
                 },
               }));
-              setModelError(event.message);
-              setLastFailedContent(content);
+              setModelError(streamError.message);
+              setLastFailedRequest({ content, selectedDocuments });
               setIsLoading(false);
               break;
+            }
 
             default:
               console.log('Unknown event type:', eventType);
@@ -496,24 +632,42 @@ function App() {
       }
     } catch (error) {
       if (error.name === 'AbortError') {
+        updateLastAssistant((message) => ({
+          ...message,
+          stage3: {
+            model: 'cancelled',
+            response: 'Council request cancelled.',
+            success: false,
+          },
+          loading: { stage1: false, stage2: false, stage3: false },
+        }));
         setCouncilProgress((previous) => ({
           ...previous,
           phase: 'cancelled',
           error: null,
           models: previous.models.map((model) => ({
             ...model,
-            stage1: model.stage1 === 'active' ? 'failed' : model.stage1,
-            stage2: model.stage2 === 'active' ? 'failed' : model.stage2,
+            stage1: ['active', 'retrying'].includes(model.stage1) ? 'failed' : model.stage1,
+            stage2: ['active', 'retrying'].includes(model.stage2) ? 'failed' : model.stage2,
           })),
           chairman: {
             ...previous.chairman,
-            stage3: previous.chairman.stage3 === 'active'
+            stage3: ['active', 'retrying'].includes(previous.chairman.stage3)
               ? 'failed'
               : previous.chairman.stage3,
           },
         }));
       } else {
         console.error('Failed to send message:', error);
+        updateLastAssistant((message) => ({
+          ...message,
+          stage3: {
+            model: 'error',
+            response: error.message,
+            success: false,
+          },
+          loading: { stage1: false, stage2: false, stage3: false },
+        }));
         setCouncilProgress((previous) => ({
           ...previous,
           phase: 'error',
@@ -521,7 +675,7 @@ function App() {
         }));
         setModelError(error.message);
       }
-      setLastFailedContent(content);
+      setLastFailedRequest({ content, selectedDocuments });
       setIsLoading(false);
     } finally {
       abortControllerRef.current = null;
@@ -533,12 +687,18 @@ function App() {
   };
 
   const handleRetry = () => {
-    if (lastFailedContent && !isLoading) {
-      const content = lastFailedContent;
-      setLastFailedContent(null);
-      handleSendMessage(content);
+    if (lastFailedRequest && !isLoading) {
+      const request = lastFailedRequest;
+      setLastFailedRequest(null);
+      handleSendMessage(request.content, request.selectedDocuments);
     }
   };
+
+  const selectedCatalogModels = availableModels.filter((model) => (
+    selectedModels.includes(model.id)
+  ));
+  const cloudModels = selectedCatalogModels.filter((model) => !model.is_local);
+  const requiresCloudConfirmation = cloudModels.length > 0;
 
   return (
     <div className="app">
@@ -570,8 +730,13 @@ function App() {
         availableModels={availableModels}
         selectedModels={selectedModels}
         chairmanModel={chairmanModel}
+        reviewProfiles={reviewProfiles}
+        reviewProfile={reviewProfile}
+        includeContext={includeContext}
         onToggleModel={handleToggleModel}
         onChairmanChange={handleChairmanChange}
+        onReviewProfileChange={handleReviewProfileChange}
+        onIncludeContextChange={handleIncludeContextChange}
         onRefreshModels={loadModels}
         modelsLoading={modelsLoading}
         modelError={modelError}
@@ -582,13 +747,22 @@ function App() {
       <main className="council-workspace">
         <CouncilFlow progress={councilProgress} />
         <ChatInterface
+          key={currentConversationId || 'no-conversation'}
           conversation={currentConversation}
           onSendMessage={handleSendMessage}
           onCancelMessage={handleCancelMessage}
           onRetry={handleRetry}
-          canRetry={Boolean(lastFailedContent)}
+          canRetry={Boolean(lastFailedRequest)}
           isLoading={isLoading}
           onApplyRecommendation={handleApplyRecommendation}
+          selectedModels={selectedModels}
+          chairmanModel={chairmanModel}
+          reviewProfile={reviewProfile}
+          includeContext={includeContext}
+          requiresCloudConfirmation={requiresCloudConfirmation}
+          cloudModelNames={cloudModels.map((model) => model.name)}
+          cloudPrivacyConfirmed={cloudPrivacyConfirmed}
+          onCloudPrivacyConfirmed={setCloudPrivacyConfirmed}
         />
       </main>
     </div>

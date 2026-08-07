@@ -16,7 +16,7 @@ __pycache__/
 venv/
 build/
 dist/
-
+*conflicted copy*
 # Frontend
 frontend/node_modules/
 frontend/dist/

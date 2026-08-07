@@ -15,8 +15,10 @@ export default function Stage3({ finalResponse }) {
   const duration = formatDuration(finalResponse.elapsed_seconds);
 
   return (
-    <div className="stage stage3">
-      <h3 className="stage-title">Stage 3: Final Council Answer</h3>
+    <div className={`stage stage3 ${finalResponse.success === false ? 'stage3--failed' : ''}`}>
+      <h3 className="stage-title">
+        {finalResponse.success === false ? 'Council request stopped' : 'Stage 3: Final Council Answer'}
+      </h3>
       <div className="final-response">
         <div className="final-response-header">
           <div className="chairman-label">

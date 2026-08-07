@@ -41,6 +41,37 @@ def _is_configured_api_key(value: str | None) -> bool:
 
 
 DATA_DIR = os.getenv("DATA_DIR", "data/conversations")
+DATABASE_PATH = os.getenv("DATABASE_PATH", "data/llm_council.db")
+APP_HOST = os.getenv("APP_HOST", "127.0.0.1").strip() or "127.0.0.1"
+
+MAX_PROMPT_CHARACTERS = int(
+    os.getenv("MAX_PROMPT_CHARACTERS", "100000")
+)
+MAX_COUNCIL_MODELS = int(os.getenv("MAX_COUNCIL_MODELS", "8"))
+MAX_CONTEXT_CHARACTERS = int(
+    os.getenv("MAX_CONTEXT_CHARACTERS", "60000")
+)
+MAX_DOCUMENTS_PER_MESSAGE = int(
+    os.getenv("MAX_DOCUMENTS_PER_MESSAGE", "5")
+)
+UPLOAD_MAX_BYTES = int(os.getenv("UPLOAD_MAX_BYTES", str(20 * 1024 * 1024)))
+DOCUMENT_CHUNK_CHARACTERS = int(
+    os.getenv("DOCUMENT_CHUNK_CHARACTERS", "12000")
+)
+DOCUMENT_CHUNK_OVERLAP = int(
+    os.getenv("DOCUMENT_CHUNK_OVERLAP", "500")
+)
+MAX_DOCUMENT_CHUNKS = int(os.getenv("MAX_DOCUMENT_CHUNKS", "12"))
+
+PROVIDER_MAX_ATTEMPTS = int(
+    os.getenv("PROVIDER_MAX_ATTEMPTS", "3")
+)
+PROVIDER_RETRY_BASE_SECONDS = float(
+    os.getenv("PROVIDER_RETRY_BASE_SECONDS", "1")
+)
+PROVIDER_RETRY_MAX_SECONDS = float(
+    os.getenv("PROVIDER_RETRY_MAX_SECONDS", "8")
+)
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "300"))
 TITLE_TIMEOUT = float(os.getenv("TITLE_TIMEOUT", "90"))
 ANTHROPIC_MAX_TOKENS = int(
@@ -62,6 +93,39 @@ OLLAMA_MAX_CONCURRENCY = int(
 
 if OLLAMA_MAX_CONCURRENCY < 1:
     raise RuntimeError("OLLAMA_MAX_CONCURRENCY must be at least 1.")
+
+if not 1 <= MAX_COUNCIL_MODELS <= 26:
+    raise RuntimeError("MAX_COUNCIL_MODELS must be between 1 and 26.")
+
+if MAX_PROMPT_CHARACTERS < 1:
+    raise RuntimeError("MAX_PROMPT_CHARACTERS must be at least 1.")
+
+if MAX_CONTEXT_CHARACTERS < 0:
+    raise RuntimeError("MAX_CONTEXT_CHARACTERS cannot be negative.")
+
+if MAX_DOCUMENTS_PER_MESSAGE < 1:
+    raise RuntimeError("MAX_DOCUMENTS_PER_MESSAGE must be at least 1.")
+
+if UPLOAD_MAX_BYTES < 1:
+    raise RuntimeError("UPLOAD_MAX_BYTES must be at least 1.")
+
+if DOCUMENT_CHUNK_CHARACTERS < 1000:
+    raise RuntimeError("DOCUMENT_CHUNK_CHARACTERS must be at least 1000.")
+
+if not 0 <= DOCUMENT_CHUNK_OVERLAP < DOCUMENT_CHUNK_CHARACTERS:
+    raise RuntimeError(
+        "DOCUMENT_CHUNK_OVERLAP must be non-negative and smaller than "
+        "DOCUMENT_CHUNK_CHARACTERS."
+    )
+
+if MAX_DOCUMENT_CHUNKS < 1:
+    raise RuntimeError("MAX_DOCUMENT_CHUNKS must be at least 1.")
+
+if PROVIDER_MAX_ATTEMPTS < 1:
+    raise RuntimeError("PROVIDER_MAX_ATTEMPTS must be at least 1.")
+
+if PROVIDER_RETRY_BASE_SECONDS < 0 or PROVIDER_RETRY_MAX_SECONDS < 0:
+    raise RuntimeError("Provider retry delays cannot be negative.")
 
 
 API_KEYS = {
@@ -251,4 +315,3 @@ if (
         "Missing or placeholder API key for TITLE_MODEL provider: "
         f"{title_provider}"
     )
-
