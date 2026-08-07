@@ -28,3 +28,9 @@ frontend/dist/
 
 # Downloaded update overlay — duplicates the project files
 llm-council-dynamic-ollama-ui-update/
+
+# Local conversation data
+data/conversations/
+data/*.db
+data/*.db-shm
+data/*.db-wal
