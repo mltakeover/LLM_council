@@ -208,7 +208,8 @@
 .flow-trunk--stage1,
 .flow-trunk--stage2,
 .flow-trunk--stage3,
-.flow-synthesis-line--active {
+.flow-synthesis-line--active,
+.flow-synthesis-line--retrying {
   background: #818cf8;
 }
 
@@ -277,7 +278,8 @@
 .flow-trunk--stage2 .flow-packet,
 .flow-trunk--stage3 .flow-packet,
 .flow-branch--active .flow-packet,
-.flow-synthesis-line--active .flow-packet {
+.flow-synthesis-line--active .flow-packet,
+.flow-synthesis-line--retrying .flow-packet {
   opacity: 1;
   animation: packetFlow 1.15s linear infinite;
 }
@@ -371,6 +373,10 @@
   gap: 6px;
 }
 
+.flow-stage-wrap {
+  min-width: 0;
+}
+
 .flow-stage {
   min-width: 0;
   padding: 5px 6px;
@@ -409,17 +415,49 @@
   background: #eef2ff;
 }
 
+.flow-stage--retrying {
+  background: #fff7ed;
+}
+
 .flow-stage--active .flow-stage-indicator {
   background: #6366f1;
   animation: statusBlink 1.15s ease-in-out infinite;
+}
+
+.flow-stage--retrying .flow-stage-indicator {
+  background: #f59e0b;
+  animation: statusBlink 0.8s ease-in-out infinite;
 }
 
 .flow-stage--active .flow-stage-state {
   color: #4f46e5;
 }
 
+.flow-stage--retrying .flow-stage-state {
+  color: #b45309;
+}
+
+.flow-stage-detail {
+  display: block;
+  margin: 3px 3px 0;
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 0.52rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .flow-stage--complete {
   background: #ecfdf5;
+}
+
+.flow-stage--skipped {
+  background: #f1f5f9;
+}
+
+.flow-stage--skipped .flow-stage-state {
+  color: #64748b;
 }
 
 .flow-stage--complete .flow-stage-indicator {
@@ -457,7 +495,8 @@
   box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
 }
 
-.flow-chairman--active {
+.flow-chairman--active,
+.flow-chairman--retrying {
   border-color: #c4b5fd;
   box-shadow: 0 5px 18px rgba(124, 58, 237, 0.14);
 }

@@ -100,6 +100,71 @@ export const api = {
     return response.json();
   },
 
+  async getReviewProfiles() {
+    const response = await fetch(`${API_BASE}/api/review-profiles`);
+    if (!response.ok) {
+      throw await responseError(response, 'Failed to load review profiles');
+    }
+    return response.json();
+  },
+
+  async listDocuments(conversationId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/documents`
+    );
+    if (!response.ok) {
+      throw await responseError(response, 'Failed to list documents');
+    }
+    return response.json();
+  },
+
+  async uploadDocument(conversationId, file, signal) {
+    const form = new FormData();
+    form.append('file', file);
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/documents`,
+      { method: 'POST', body: form, signal }
+    );
+    if (!response.ok) {
+      throw await responseError(response, `Failed to upload ${file.name}`);
+    }
+    return response.json();
+  },
+
+  async deleteDocument(conversationId, documentId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/documents/${documentId}`,
+      { method: 'DELETE' }
+    );
+    if (!response.ok) {
+      throw await responseError(response, 'Failed to delete document');
+    }
+    return response.json();
+  },
+
+  async estimateUsage(conversationId, content, options = {}, signal) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/usage-estimate`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content,
+          models: options.models,
+          chairman_model: options.chairmanModel,
+          review_profile: options.reviewProfile,
+          include_context: options.includeContext,
+          document_ids: options.documentIds,
+        }),
+        signal,
+      }
+    );
+    if (!response.ok) {
+      throw await responseError(response, 'Failed to estimate usage');
+    }
+    return response.json();
+  },
+
   async sendMessage(conversationId, content, options = {}) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message`,
@@ -110,6 +175,10 @@ export const api = {
           content,
           models: options.models,
           chairman_model: options.chairmanModel,
+          review_profile: options.reviewProfile,
+          include_context: options.includeContext,
+          document_ids: options.documentIds,
+          cloud_processing_confirmed: options.cloudProcessingConfirmed,
         }),
         signal: options.signal,
       }
@@ -139,6 +208,10 @@ export const api = {
           content,
           models: options.models,
           chairman_model: options.chairmanModel,
+          review_profile: options.reviewProfile,
+          include_context: options.includeContext,
+          document_ids: options.documentIds,
+          cloud_processing_confirmed: options.cloudProcessingConfirmed,
         }),
         signal: options.signal,
       }

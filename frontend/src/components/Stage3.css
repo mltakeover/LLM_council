@@ -4,6 +4,20 @@
   box-shadow: 0 4px 14px rgba(5, 150, 105, 0.06);
 }
 
+.stage3--failed {
+  border-color: #fecaca;
+  background: #fef2f2;
+  box-shadow: 0 4px 14px rgba(220, 38, 38, 0.05);
+}
+
+.stage3--failed .final-response {
+  border-color: #fecaca;
+}
+
+.stage3--failed .chairman-label {
+  color: #b91c1c;
+}
+
 .final-response {
   background: var(--color-surface);
   padding: 20px;

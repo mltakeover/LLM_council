@@ -15,6 +15,9 @@ const TEXTAREA_MAX_HEIGHT = 300;
 // skip the recommendation call entirely rather than fire on every keystroke.
 const RECOMMENDATION_MIN_LENGTH = 12;
 const RECOMMENDATION_DEBOUNCE_MS = 600;
+const USAGE_DEBOUNCE_MS = 450;
+const MAX_SELECTED_DOCUMENTS = 5;
+const DOCUMENT_ACCEPT = '.txt,.md,.py,.js,.jsx,.ts,.tsx,.json,.yaml,.yml,.toml,.csv,.sql,.xml,.html,.css,.pdf,.docx';
 
 export default function ChatInterface({
   conversation,
@@ -24,9 +27,22 @@ export default function ChatInterface({
   canRetry,
   isLoading,
   onApplyRecommendation,
+  selectedModels,
+  chairmanModel,
+  reviewProfile,
+  includeContext,
+  requiresCloudConfirmation,
+  cloudModelNames,
+  cloudPrivacyConfirmed,
+  onCloudPrivacyConfirmed,
 }) {
   const [input, setInput] = useState('');
   const [recommendation, setRecommendation] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [documentError, setDocumentError] = useState(null);
+  const [usageEstimate, setUsageEstimate] = useState(null);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -37,6 +53,24 @@ export default function ChatInterface({
   useEffect(() => {
     scrollToBottom();
   }, [conversation]);
+
+  useEffect(() => {
+    let active = true;
+    if (!conversation?.id) {
+      return undefined;
+    }
+
+    api.listDocuments(conversation.id)
+      .then((payload) => {
+        if (active) setDocuments(payload.documents || []);
+      })
+      .catch((error) => {
+        if (active) setDocumentError(error.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [conversation?.id]);
 
   // Auto-grow the textarea to fit its content instead of a fixed row count.
   useEffect(() => {
@@ -81,11 +115,114 @@ export default function ChatInterface({
     };
   }, [input, isLoading]);
 
+  useEffect(() => {
+    if (!conversation?.id || isLoading || (!input.trim() && selectedDocumentIds.length === 0)) {
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        setUsageEstimate(await api.estimateUsage(
+          conversation.id,
+          input.trim(),
+          {
+            models: selectedModels,
+            chairmanModel,
+            reviewProfile,
+            includeContext,
+            documentIds: selectedDocumentIds,
+          },
+          controller.signal,
+        ));
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          console.error('Failed to estimate usage:', error);
+        }
+      }
+    }, USAGE_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    conversation?.id,
+    input,
+    selectedDocumentIds,
+    selectedModels,
+    chairmanModel,
+    reviewProfile,
+    includeContext,
+    isLoading,
+  ]);
+
+  const selectedDocuments = documents.filter((document) => (
+    selectedDocumentIds.includes(document.id)
+  ));
+  const privacyReady = !requiresCloudConfirmation || cloudPrivacyConfirmed;
+
+  const handleDocumentUpload = async (event) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!conversation?.id || files.length === 0) return;
+    if (selectedDocumentIds.length + files.length > MAX_SELECTED_DOCUMENTS) {
+      setDocumentError(`Select no more than ${MAX_SELECTED_DOCUMENTS} documents per review.`);
+      return;
+    }
+
+    setUploading(true);
+    setDocumentError(null);
+    try {
+      const uploaded = [];
+      for (const file of files) {
+        uploaded.push(await api.uploadDocument(conversation.id, file));
+      }
+      setDocuments((previous) => [...previous, ...uploaded]);
+      setSelectedDocumentIds((previous) => [
+        ...previous,
+        ...uploaded.map((document) => document.id),
+      ]);
+    } catch (error) {
+      setDocumentError(error.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const toggleDocument = (documentId) => {
+    if (isLoading) return;
+    setSelectedDocumentIds((previous) => {
+      if (previous.includes(documentId)) {
+        return previous.filter((id) => id !== documentId);
+      }
+      if (previous.length >= MAX_SELECTED_DOCUMENTS) {
+        setDocumentError(`Select no more than ${MAX_SELECTED_DOCUMENTS} documents per review.`);
+        return previous;
+      }
+      setDocumentError(null);
+      return [...previous, documentId];
+    });
+  };
+
+  const removeDocument = async (documentId) => {
+    if (!conversation?.id || isLoading) return;
+    try {
+      await api.deleteDocument(conversation.id, documentId);
+      setDocuments((previous) => previous.filter((document) => document.id !== documentId));
+      setSelectedDocumentIds((previous) => previous.filter((id) => id !== documentId));
+    } catch (error) {
+      setDocumentError(error.message);
+    }
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (input.trim() && !isLoading) {
-      onSendMessage(input);
+    if (input.trim() && !isLoading && privacyReady) {
+      onSendMessage(input, selectedDocuments);
       setInput('');
+      setSelectedDocumentIds([]);
+      setUsageEstimate(null);
       setRecommendation(null);
     }
   };
@@ -138,6 +275,13 @@ export default function ChatInterface({
                       <div className="markdown-content">
                         <Markdown>{msg.content}</Markdown>
                       </div>
+                      {msg.documents?.length > 0 && (
+                        <div className="message-documents">
+                          {msg.documents.map((document) => (
+                            <span key={document.id}>▤ {document.filename}</span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : (
@@ -243,34 +387,103 @@ export default function ChatInterface({
         </div>
       )}
 
+      {requiresCloudConfirmation && (
+        <label className="privacy-confirmation">
+          <input
+            type="checkbox"
+            checked={cloudPrivacyConfirmed}
+            onChange={(event) => onCloudPrivacyConfirmed(event.target.checked)}
+            disabled={isLoading}
+          />
+          <span>
+            <strong>Confirm cloud processing</strong>
+            This review will send the prompt and selected documents to{' '}
+            {cloudModelNames.join(', ')}. Your provider account settings govern retention and training.
+          </span>
+        </label>
+      )}
+
       <form className="input-form" onSubmit={handleSubmit}>
-        <textarea
-          ref={textareaRef}
-          className="message-input"
-          placeholder="Ask your question... (Shift+Enter for new line, Enter to send)"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={isLoading}
-          rows={1}
-        />
-        {isLoading ? (
-          <button
-            type="button"
-            className="send-button send-button--cancel"
-            onClick={onCancelMessage}
-          >
-            Stop
-          </button>
-        ) : (
-          <button
-            type="submit"
-            className="send-button"
-            disabled={!input.trim()}
-          >
-            Send
-          </button>
+        <div className="composer-tools">
+          <label className={`file-upload-button ${uploading ? 'disabled' : ''}`}>
+            <input
+              type="file"
+              accept={DOCUMENT_ACCEPT}
+              multiple
+              onChange={handleDocumentUpload}
+              disabled={isLoading || uploading}
+            />
+            {uploading ? 'Uploading…' : '＋ Add files'}
+          </label>
+          {usageEstimate && (input.trim() || selectedDocumentIds.length > 0) && (
+            <span className="usage-estimate" title={usageEstimate.caveat}>
+              ≈ {usageEstimate.estimated_source_tokens.toLocaleString()} input tokens ·{' '}
+              {usageEstimate.estimated_calls.total} model calls
+              {usageEstimate.chunked_review ? ' · chunked review' : ''}
+            </span>
+          )}
+        </div>
+
+        {documents.length > 0 && (
+          <div className="document-picker" aria-label="Conversation documents">
+            {documents.map((document) => {
+              const selected = selectedDocumentIds.includes(document.id);
+              return (
+                <span className={`document-chip ${selected ? 'selected' : ''}`} key={document.id}>
+                  <button
+                    type="button"
+                    onClick={() => toggleDocument(document.id)}
+                    disabled={isLoading}
+                    title={`${document.character_count.toLocaleString()} characters · ${document.chunk_count} chunks`}
+                  >
+                    {selected ? '✓' : '○'} {document.filename}
+                  </button>
+                  <button
+                    type="button"
+                    className="document-delete"
+                    onClick={() => removeDocument(document.id)}
+                    disabled={isLoading}
+                    aria-label={`Delete ${document.filename}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              );
+            })}
+          </div>
         )}
+        {documentError && <div className="document-error" role="alert">{documentError}</div>}
+
+        <div className="composer-row">
+          <textarea
+            ref={textareaRef}
+            className="message-input"
+            placeholder="Ask your question... (Shift+Enter for new line, Enter to send)"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={isLoading}
+            rows={1}
+          />
+          {isLoading ? (
+            <button
+              type="button"
+              className="send-button send-button--cancel"
+              onClick={onCancelMessage}
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="send-button"
+              disabled={!input.trim() || !privacyReady}
+              title={!privacyReady ? 'Confirm cloud processing before sending' : undefined}
+            >
+              Send
+            </button>
+          )}
+        </div>
       </form>
     </div>
   );

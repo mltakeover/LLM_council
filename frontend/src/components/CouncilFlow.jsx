@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { shortModelName as shortModelId, providerName as providerOf } from '../utils/modelDisplay';
 import './CouncilFlow.css';
 
@@ -25,26 +25,34 @@ function statusText(status) {
   return {
     pending: 'Waiting',
     active: 'In progress',
+    retrying: 'Retrying',
     complete: 'Completed',
     failed: 'Failed',
+    skipped: 'Not needed',
   }[status] || 'Waiting';
 }
 
-function StageStatus({ label, status = 'pending' }) {
+function StageStatus({ label, status = 'pending', attempts, elapsed, error }) {
+  const detail = error?.message
+    || (elapsed != null ? `${elapsed}s${attempts ? ` · ${attempts} attempt${attempts === 1 ? '' : 's'}` : ''}` : null)
+    || (attempts ? `Attempt ${attempts}` : null);
   return (
-    <div className={`flow-stage flow-stage--${status}`}>
-      <span className="flow-stage-indicator" aria-hidden="true" />
-      <span className="flow-stage-label">{label}</span>
-      <span className="flow-stage-state">{statusText(status)}</span>
+    <div className={`flow-stage-wrap flow-stage-wrap--${status}`} title={error?.message || undefined}>
+      <div className={`flow-stage flow-stage--${status}`}>
+        <span className="flow-stage-indicator" aria-hidden="true" />
+        <span className="flow-stage-label">{label}</span>
+        <span className="flow-stage-state">{statusText(status)}</span>
+      </div>
+      {detail && <small className="flow-stage-detail">{detail}</small>}
     </div>
   );
 }
 
 function ModelNode({ model }) {
   const stageStates = [model.stage1, model.stage2];
-  const connectionState = stageStates.includes('active')
+  const connectionState = stageStates.some((status) => ['active', 'retrying'].includes(status))
     ? 'active'
-    : stageStates.every((status) => status === 'complete')
+      : stageStates.every((status) => ['complete', 'skipped'].includes(status))
       ? 'complete'
       : stageStates.includes('failed')
         ? 'failed'
@@ -69,8 +77,20 @@ function ModelNode({ model }) {
           <span className={`flow-model-dot flow-model-dot--${connectionState}`} />
         </header>
         <div className="flow-model-stages">
-          <StageStatus label="Answer" status={model.stage1} />
-          <StageStatus label="Review" status={model.stage2} />
+          <StageStatus
+            label="Answer"
+            status={model.stage1}
+            attempts={model.attempts?.stage1}
+            elapsed={model.elapsed?.stage1}
+            error={model.errors?.stage1}
+          />
+          <StageStatus
+            label="Review"
+            status={model.stage2}
+            attempts={model.attempts?.stage2}
+            elapsed={model.elapsed?.stage2}
+            error={model.errors?.stage2}
+          />
         </div>
       </article>
     </div>
@@ -83,20 +103,16 @@ export default function CouncilFlow({ progress, isLoading = false }) {
   const models = progress?.models || [];
   const chairman = progress?.chairman || {};
 
-  const settledTasks = useMemo(() => {
-    const isSettled = (status) => (
-      status === 'complete' || status === 'failed'
-    );
-    const modelTasks = models.reduce(
-      (count, model) => (
-        count
-        + Number(isSettled(model.stage1))
-        + Number(isSettled(model.stage2))
-      ),
-      0,
-    );
-    return modelTasks + Number(isSettled(chairman.stage3));
-  }, [models, chairman.stage3]);
+  const isSettled = (status) => ['complete', 'failed', 'skipped'].includes(status);
+  const modelTasks = models.reduce(
+    (count, model) => (
+      count
+      + Number(isSettled(model.stage1))
+      + Number(isSettled(model.stage2))
+    ),
+    0,
+  );
+  const settledTasks = modelTasks + Number(isSettled(chairman.stage3));
 
   const totalTasks = models.length * 2 + (chairman.id ? 1 : 0);
   const percent = totalTasks ? Math.round((settledTasks / totalTasks) * 100) : 0;
@@ -170,7 +186,13 @@ export default function CouncilFlow({ progress, isLoading = false }) {
                   <small>Chairman · final synthesis</small>
                   <strong title={shortModelName(chairman.id)}>{shortModelName(chairman.id)}</strong>
                 </div>
-                <StageStatus label="Synthesis" status={chairman.stage3 || 'pending'} />
+                <StageStatus
+                  label="Synthesis"
+                  status={chairman.stage3 || 'pending'}
+                  attempts={chairman.attempts?.stage3}
+                  elapsed={chairman.elapsed?.stage3}
+                  error={chairman.errors?.stage3}
+                />
               </article>
             </div>
           )}
