@@ -10,6 +10,7 @@ import {
   downloadConversationPdf,
 } from '../utils/exportConversation';
 import { shortModelName } from '../utils/modelDisplay';
+import { scrollElementToBottom } from '../utils/scroll';
 import './ChatInterface.css';
 
 const TEXTAREA_MIN_HEIGHT = 52;
@@ -51,15 +52,13 @@ export default function ChatInterface({
   const [usageEstimate, setUsageEstimate] = useState(null);
   const [exporting, setExporting] = useState(null);
   const [exportError, setExportError] = useState(null);
-  const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const textareaRef = useRef(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
   useEffect(() => {
-    scrollToBottom();
+    // Keep scrolling scoped to the chat pane. scrollIntoView() also scrolls
+    // ancestor containers, which could move the sidebar away from its header.
+    scrollElementToBottom(messagesContainerRef.current);
   }, [conversation]);
 
   useEffect(() => {
@@ -292,7 +291,7 @@ export default function ChatInterface({
 
   return (
     <div className="chat-interface">
-      <div className="messages-container">
+      <div className="messages-container" ref={messagesContainerRef}>
         {conversation.messages.length === 0 ? (
           <div className="empty-state">
             <h2>Start a conversation</h2>
@@ -415,7 +414,7 @@ export default function ChatInterface({
           </div>
         )}
 
-        <div ref={messagesEndRef} />
+        <div aria-hidden="true" />
       </div>
 
       {recommendation

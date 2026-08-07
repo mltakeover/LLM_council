@@ -44,3 +44,6 @@ yarn-error.log*
 
 # Downloaded update overlay — duplicates project files
 llm-council-dynamic-ollama-ui-update/
+
+# Vite development cache
+frontend/.vite/
