@@ -32,9 +32,14 @@ function statusText(status) {
   }[status] || 'Waiting';
 }
 
-function StageStatus({ label, status = 'pending', attempts, elapsed, error }) {
+function tokenText(usage) {
+  if (!usage?.total_tokens) return null;
+  return `${usage.total_tokens.toLocaleString()} tokens`;
+}
+
+function StageStatus({ label, status = 'pending', attempts, elapsed, usage, error }) {
   const detail = error?.message
-    || (elapsed != null ? `${elapsed}s${attempts ? ` · ${attempts} attempt${attempts === 1 ? '' : 's'}` : ''}` : null)
+    || (elapsed != null ? `${elapsed}s${attempts ? ` · ${attempts} attempt${attempts === 1 ? '' : 's'}` : ''}${tokenText(usage) ? ` · ${tokenText(usage)}` : ''}` : null)
     || (attempts ? `Attempt ${attempts}` : null);
   return (
     <div className={`flow-stage-wrap flow-stage-wrap--${status}`} title={error?.message || undefined}>
@@ -48,7 +53,57 @@ function StageStatus({ label, status = 'pending', attempts, elapsed, error }) {
   );
 }
 
-function ModelNode({ model }) {
+function RunDetails({ node, onClose }) {
+  if (!node) return null;
+  const stages = node.kind === 'chairman'
+    ? [{ key: 'stage3', label: 'Synthesis' }]
+    : [
+        { key: 'stage1', label: 'Independent answer' },
+        { key: 'stage2', label: 'Peer review' },
+      ];
+
+  return (
+    <aside className="flow-detail-panel" aria-label={`${shortModelName(node.id)} run details`}>
+      <header>
+        <div>
+          <small>{node.kind === 'chairman' ? 'Chairman details' : 'Council member details'}</small>
+          <h3>{shortModelName(node.id)}</h3>
+          <p>{providerName(node.id)} · {node.id}</p>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Close model details">×</button>
+      </header>
+      <div className="flow-detail-grid">
+        {stages.map(({ key, label }) => {
+          const usage = node.usage?.[key];
+          const error = node.errors?.[key];
+          return (
+            <section key={key} className={`flow-detail-stage flow-detail-stage--${node[key] || 'pending'}`}>
+              <div className="flow-detail-stage-heading">
+                <strong>{label}</strong>
+                <span>{statusText(node[key])}</span>
+              </div>
+              <dl>
+                <div><dt>Elapsed</dt><dd>{node.elapsed?.[key] == null ? '—' : `${node.elapsed[key]}s`}</dd></div>
+                <div><dt>Attempts</dt><dd>{node.attempts?.[key] ?? '—'}</dd></div>
+                <div><dt>Input tokens</dt><dd>{usage?.input_tokens?.toLocaleString() ?? 'Not reported'}</dd></div>
+                <div><dt>Output tokens</dt><dd>{usage?.output_tokens?.toLocaleString() ?? 'Not reported'}</dd></div>
+                <div><dt>Total tokens</dt><dd>{usage?.total_tokens?.toLocaleString() ?? 'Not reported'}</dd></div>
+              </dl>
+              {error && (
+                <div className="flow-detail-error" role="alert">
+                  <strong>{error.code || 'Provider error'}</strong>
+                  <span>{error.message}</span>
+                </div>
+              )}
+            </section>
+          );
+        })}
+      </div>
+    </aside>
+  );
+}
+
+function ModelNode({ model, selected, onSelect }) {
   const stageStates = [model.stage1, model.stage2];
   const connectionState = stageStates.some((status) => ['active', 'retrying'].includes(status))
     ? 'active'
@@ -65,7 +120,13 @@ function ModelNode({ model }) {
       <div className="flow-branch-line" aria-hidden="true">
         <span className="flow-packet" />
       </div>
-      <article className={`flow-model-card flow-model-card--${connectionState}`}>
+      <button
+        type="button"
+        className={`flow-model-card flow-model-card--${connectionState}${selected ? ' flow-model-card--selected' : ''}`}
+        onClick={onSelect}
+        aria-pressed={selected}
+        title={`Open run details for ${shortModelName(model.id)}`}
+      >
         <header className="flow-model-header">
           <span className="flow-provider-icon" aria-hidden="true">
             {providerName(model.id).charAt(0)}
@@ -82,6 +143,7 @@ function ModelNode({ model }) {
             status={model.stage1}
             attempts={model.attempts?.stage1}
             elapsed={model.elapsed?.stage1}
+            usage={model.usage?.stage1}
             error={model.errors?.stage1}
           />
           <StageStatus
@@ -89,19 +151,28 @@ function ModelNode({ model }) {
             status={model.stage2}
             attempts={model.attempts?.stage2}
             elapsed={model.elapsed?.stage2}
+            usage={model.usage?.stage2}
             error={model.errors?.stage2}
           />
         </div>
-      </article>
+      </button>
     </div>
   );
 }
 
 export default function CouncilFlow({ progress, isLoading = false }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [selection, setSelection] = useState(null);
   const phase = progress?.phase || (isLoading ? 'connecting' : 'ready');
   const models = progress?.models || [];
   const chairman = progress?.chairman || {};
+  const selectedNode = selection?.kind === 'chairman'
+    ? { ...chairman, kind: 'chairman' }
+    : (
+        models.find((model) => model.id === selection?.id)
+          ? { ...models.find((model) => model.id === selection.id), kind: 'model' }
+          : null
+      );
 
   const isSettled = (status) => ['complete', 'failed', 'skipped'].includes(status);
   const modelTasks = models.reduce(
@@ -173,14 +244,33 @@ export default function CouncilFlow({ progress, isLoading = false }) {
               </div>
 
               <div className="flow-model-grid">
-                {models.map((model) => <ModelNode key={model.id} model={model} />)}
+                {models.map((model) => (
+                  <ModelNode
+                    key={model.id}
+                    model={model}
+                    selected={selection?.kind === 'model' && selection.id === model.id}
+                    onSelect={() => setSelection((previous) => (
+                      previous?.kind === 'model' && previous.id === model.id
+                        ? null
+                        : { kind: 'model', id: model.id }
+                    ))}
+                  />
+                ))}
               </div>
 
               <div className={`flow-synthesis-line flow-synthesis-line--${chairman.stage3 || 'pending'}`} aria-hidden="true">
                 <span className="flow-packet" />
               </div>
 
-              <article className={`flow-chairman flow-chairman--${chairman.stage3 || 'pending'}`}>
+              <button
+                type="button"
+                className={`flow-chairman flow-chairman--${chairman.stage3 || 'pending'}${selection?.kind === 'chairman' ? ' flow-chairman--selected' : ''}`}
+                onClick={() => setSelection((previous) => (
+                  previous?.kind === 'chairman' ? null : { kind: 'chairman', id: chairman.id }
+                ))}
+                aria-pressed={selection?.kind === 'chairman'}
+                title="Open Chairman run details"
+              >
                 <div className="flow-chairman-crown" aria-hidden="true">◆</div>
                 <div className="flow-chairman-copy">
                   <small>Chairman · final synthesis</small>
@@ -191,9 +281,11 @@ export default function CouncilFlow({ progress, isLoading = false }) {
                   status={chairman.stage3 || 'pending'}
                   attempts={chairman.attempts?.stage3}
                   elapsed={chairman.elapsed?.stage3}
+                  usage={chairman.usage?.stage3}
                   error={chairman.errors?.stage3}
                 />
-              </article>
+              </button>
+              <RunDetails node={selectedNode} onClose={() => setSelection(null)} />
             </div>
           )}
         </div>

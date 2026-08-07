@@ -1,0 +1,21 @@
+.consensus-panel { margin: 14px 0; padding: 16px; border: 1px solid #ddd6fe; border-radius: 12px; background: linear-gradient(135deg, #faf5ff, #fff); }
+.consensus-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.consensus-panel h4, .consensus-panel h5, .consensus-panel p { margin: 0; }
+.consensus-panel h4 { margin-top: 3px; color: #172033; font-size: 16px; }
+.agreement-badge { max-width: 310px; padding: 8px 10px; display: grid; gap: 2px; border: 1px solid #ddd6fe; border-radius: 9px; background: #fff; }
+.agreement-badge strong { color: #5b21b6; font-size: 11px; }
+.agreement-badge span { color: #64748b; font-size: 10px; line-height: 1.35; }
+.agreement-badge--unanimous, .agreement-badge--strong { border-color: #a7f3d0; background: #f0fdf4; }
+.agreement-badge--unanimous strong, .agreement-badge--strong strong { color: #047857; }
+.agreement-badge--split { border-color: #fed7aa; background: #fff7ed; }
+.agreement-badge--split strong { color: #c2410c; }
+.consensus-columns { margin-top: 13px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.consensus-columns > section { padding: 12px; border: 1px solid #ede9fe; border-radius: 9px; background: rgba(255,255,255,.8); }
+.consensus-columns h5 { display: flex; align-items: center; gap: 7px; color: #334155; font-size: 12px; }
+.consensus-columns ul { margin: 9px 0 0; padding-left: 18px; color: #475569; font-size: 11px; line-height: 1.5; }
+.consensus-columns p { margin-top: 9px; color: #64748b; font-size: 11px; }
+.consensus-icon { width: 19px; height: 19px; display: grid; place-items: center; border-radius: 50%; font-size: 10px; }
+.consensus-icon--agree { background: #dcfce7; color: #15803d; }
+.consensus-icon--dissent { background: #ffedd5; color: #c2410c; }
+.consensus-caveat { display: block; margin-top: 9px; color: #94a3b8; font-size: 9px; }
+@media (max-width: 760px) { .consensus-panel > header { flex-direction: column; } .agreement-badge { max-width: none; width: 100%; } .consensus-columns { grid-template-columns: 1fr; } }

@@ -4,7 +4,11 @@ import Markdown from './Markdown';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
-import { downloadConversationMarkdown } from '../utils/exportConversation';
+import {
+  downloadConversationDocx,
+  downloadConversationMarkdown,
+  downloadConversationPdf,
+} from '../utils/exportConversation';
 import { shortModelName } from '../utils/modelDisplay';
 import './ChatInterface.css';
 
@@ -44,6 +48,8 @@ export default function ChatInterface({
   const [uploading, setUploading] = useState(false);
   const [documentError, setDocumentError] = useState(null);
   const [usageEstimate, setUsageEstimate] = useState(null);
+  const [exporting, setExporting] = useState(null);
+  const [exportError, setExportError] = useState(null);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -221,6 +227,26 @@ export default function ChatInterface({
     }
   };
 
+  const handleExport = async (format) => {
+    if (!conversation || exporting) return;
+    setExportError(null);
+    setExporting(format);
+    try {
+      if (format === 'docx') {
+        await downloadConversationDocx(conversation);
+      } else if (format === 'pdf') {
+        await downloadConversationPdf(conversation);
+      } else {
+        downloadConversationMarkdown(conversation);
+      }
+    } catch (error) {
+      console.error(`Failed to export ${format}:`, error);
+      setExportError(`Could not create the ${format.toUpperCase()} export.`);
+    } finally {
+      setExporting(null);
+    }
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
     if (input.trim() && !isLoading && privacyReady) {
@@ -262,14 +288,20 @@ export default function ChatInterface({
         ) : (
           <>
             <div className="conversation-toolbar">
-              <button
-                type="button"
-                className="export-button"
-                onClick={() => downloadConversationMarkdown(conversation)}
-              >
-                ⤓ Export as Markdown
-              </button>
+              <span>Export conversation</span>
+              {['md', 'docx', 'pdf'].map((format) => (
+                <button
+                  key={format}
+                  type="button"
+                  className="export-button"
+                  onClick={() => handleExport(format)}
+                  disabled={Boolean(exporting)}
+                >
+                  {exporting === format ? 'Creating…' : `⤓ ${format.toUpperCase()}`}
+                </button>
+              ))}
             </div>
+            {exportError && <div className="export-error" role="alert">{exportError}</div>}
 
             {conversation.messages.map((msg, index) => (
               <div key={index} className="message-group">
@@ -324,7 +356,9 @@ export default function ChatInterface({
                         <span>Running Stage 3: Final synthesis...</span>
                       </div>
                     )}
-                    {msg.stage3 && <Stage3 finalResponse={msg.stage3} />}
+                    {msg.stage3 && (
+                      <Stage3 finalResponse={msg.stage3} metadata={msg.metadata} />
+                    )}
                   </div>
                 )}
               </div>

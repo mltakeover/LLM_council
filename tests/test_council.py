@@ -8,6 +8,7 @@ from backend.council import (
     ChairmanReport,
     _report_to_markdown,
     calculate_aggregate_rankings,
+    calculate_consensus_metrics,
     get_model_recommendations,
     parse_ranking_from_text,
 )
@@ -122,6 +123,8 @@ def test_chairman_report_renders_prioritised_markdown() -> None:
             impact="Authorisation controls may be applied inconsistently.",
             recommendation="Document the boundary and its controls.",
         )],
+        consensus=["Both reviewers identified the missing boundary."],
+        disagreements=["Reviewers differed on delivery priority."],
         assumptions=[],
         dependencies=["Identity provider"],
         open_questions=["Who owns the API gateway?"],
@@ -133,6 +136,24 @@ def test_chairman_report_renders_prioritised_markdown() -> None:
     assert "[HIGH] Missing trust boundary" in markdown
     assert "## Dependencies" in markdown
     assert "Identity provider" in markdown
+    assert "## Council consensus" in markdown
+    assert "## Council disagreements" in markdown
+
+
+def test_consensus_metrics_reports_top_choice_agreement() -> None:
+    metrics = calculate_consensus_metrics(
+        [
+            {"ranking_valid": True, "parsed_ranking": ["Response A", "Response B"]},
+            {"ranking_valid": True, "parsed_ranking": ["Response A", "Response B"]},
+            {"ranking_valid": True, "parsed_ranking": ["Response B", "Response A"]},
+        ],
+        {"Response A": "model-a", "Response B": "model-b"},
+    )
+
+    assert metrics["top_choice_model"] == "model-a"
+    assert metrics["top_choice_votes"] == 2
+    assert metrics["top_choice_share"] == 0.667
+    assert metrics["agreement_level"] == "moderate"
 
 
 @pytest.mark.asyncio

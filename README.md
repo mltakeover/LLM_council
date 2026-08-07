@@ -17,16 +17,21 @@ used.
 - General, HLD, LLD, code, and security review profiles
 - Bounded conversation context for useful follow-up questions
 - Live per-model started, retrying, completed, and failed events
+- Clickable council nodes with stage timing, attempts, errors, and reported tokens
+- Side-by-side council response comparison
 - Structured provider errors, timeouts, exponential backoff, and safe logging
 - A guard that stops the stream if every Stage 1 model fails
 - Structured Chairman findings with severity, evidence, impact, and remediation
+- Filterable findings dashboard plus semantic consensus and ranking agreement
 - TXT, Markdown, source code, JSON, YAML, TOML, CSV, SQL, XML, HTML, CSS, PDF,
   and DOCX uploads
 - Bounded overlapping chunks and per-model map/reduce review for long documents
 - SQLite conversations, messages, document text, and automatic legacy JSON import
 - Pre-send cloud-processing confirmation and approximate input/call estimates
-- Conversation search, rename, delete, retry, and Markdown export
-- Backend and frontend tests plus GitHub Actions CI
+- Provider status screen with privacy-safe connectivity tests
+- Built-in and user-saved council presets
+- Conversation search, rename, delete, retry, and Markdown, DOCX, or PDF export
+- Backend and frontend test suites
 
 ## How the council works
 
@@ -80,10 +85,9 @@ LLM_council/
 │   ├── review_profiles.py   # Built-in review modes and reviewer roles
 │   └── storage.py           # SQLite persistence and JSON migration
 ├── frontend/
-│   ├── src/                 # React UI
+│   ├── src/                 # React UI, dashboards, presets, status, exports
 │   └── test/                # Frontend unit tests
 ├── tests/                   # Backend unit and integration tests
-├── .github/workflows/ci.yml
 ├── .env.example
 ├── pyproject.toml
 └── README.md
@@ -272,7 +276,13 @@ The root backend health response is available at
 6. Optionally upload and select up to five documents.
 7. If a cloud model is selected, read and accept the cloud-processing notice.
 8. Review the approximate token and call estimate, then send.
-9. Watch each model move through its own live status.
+9. Watch each model move through its own live status; click a model or the
+   Chairman to inspect timings, attempts, errors, and reported token usage.
+10. Use **Compare** for side-by-side answers, then filter the Chairman findings
+    and inspect consensus or dissent.
+11. Save useful model/profile combinations as council presets. Use **Status**
+    to run a generic connectivity check against a model.
+12. Export a completed conversation as Markdown, DOCX, or PDF.
 
 Files stay available within their conversation until individually deleted or
 the conversation is deleted. Long files are automatically split into bounded,
@@ -336,6 +346,7 @@ deleted. Keep a backup until you confirm the imported conversations in the UI.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/models` | Configured cloud and discovered Ollama models plus limits |
+| `POST` | `/api/models/test` | Run a generic connectivity probe against one selectable model |
 | `GET` | `/api/review-profiles` | Built-in review profiles |
 | `GET/POST` | `/api/conversations` | List or create conversations |
 | `GET/PATCH/DELETE` | `/api/conversations/{id}` | Read, rename, or delete a conversation |
@@ -349,7 +360,9 @@ deleted. Keep a backup until you confirm the imported conversations in the UI.
 
 Provider progress SSE event types are `model_started`, `model_retrying`,
 `model_completed`, and `model_failed`. Every event contains the model ID and
-stage. Terminal stream events are `complete` or a structured `error`.
+stage. Successful provider events include normalized token usage when the
+provider reports it. Terminal stream events are `complete` or a structured
+`error`.
 
 ## Development and tests
 
@@ -376,9 +389,8 @@ npm test
 npm run build
 ```
 
-`.github/workflows/ci.yml` runs the same backend and frontend checks on pushes
-to `master` or `main` and on pull requests. Tests mock model execution and do
-not require Ollama or cloud credentials.
+The automated tests mock model execution and do not require Ollama or cloud
+credentials.
 
 ## Troubleshooting
 

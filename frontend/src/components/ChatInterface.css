@@ -64,8 +64,18 @@
 
 .conversation-toolbar {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 6px;
   margin-bottom: 12px;
+}
+
+.conversation-toolbar > span {
+  margin-right: 3px;
+  color: var(--color-text-quaternary);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
 }
 
 .export-button {
@@ -84,6 +94,21 @@
   border-color: var(--color-primary-200);
   color: var(--color-primary-700);
   background: var(--color-primary-50);
+}
+
+.export-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.export-error {
+  padding: 8px 10px;
+  margin: -4px 0 12px;
+  border: 1px solid var(--color-danger-200);
+  border-radius: 7px;
+  background: var(--color-danger-100);
+  color: var(--color-danger-600);
+  font-size: 11px;
 }
 
 .loading-indicator {

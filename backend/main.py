@@ -26,6 +26,7 @@ from .config import (
 )
 from .council import (
     calculate_aggregate_rankings,
+    calculate_consensus_metrics,
     generate_conversation_title,
     get_model_recommendations,
     run_full_council,
@@ -34,7 +35,7 @@ from .council import (
     stage3_synthesize_final,
 )
 from .documents import DocumentExtractionError, extract_document
-from .providers import list_ollama_models
+from .providers import list_ollama_models, query_model
 from .review_profiles import is_valid_review_profile, list_review_profiles
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="LLM Council API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="LLM Council API", version="0.3.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -107,6 +108,18 @@ class RecommendModelsRequest(BaseModel):
     @classmethod
     def profile_must_exist(cls, value: str) -> str:
         return _normalized_review_profile(value)
+
+
+class TestModelRequest(BaseModel):
+    model: str = Field(min_length=3, max_length=300)
+
+    @field_validator("model")
+    @classmethod
+    def model_must_use_provider_prefix(cls, value: str) -> str:
+        normalized = value.strip()
+        if ":" not in normalized:
+            raise ValueError("model must use provider:model-name format")
+        return normalized
 
 
 class UsageEstimateRequest(BaseModel):
@@ -284,7 +297,7 @@ async def _run_with_events(
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "LLM Council API", "version": "0.2.0"}
+    return {"status": "ok", "service": "LLM Council API", "version": "0.3.0"}
 
 
 @app.get("/api/review-profiles")
@@ -342,6 +355,38 @@ async def get_models():
             "max_prompt_characters": MAX_PROMPT_CHARACTERS,
             "max_documents_per_message": MAX_DOCUMENTS_PER_MESSAGE,
         },
+    }
+
+
+@app.post("/api/models/test")
+async def test_model(request: TestModelRequest):
+    """Run a privacy-safe connectivity probe without conversation content."""
+
+    catalog = await get_models()
+    available = {
+        model["id"]: model
+        for model in catalog["models"]
+        if model.get("selectable")
+    }
+    if request.model not in available:
+        raise HTTPException(status_code=400, detail="Model is not currently available")
+
+    result = await query_model(
+        request.model,
+        [{
+            "role": "user",
+            "content": "Connectivity check. Reply with the single word OK.",
+        }],
+        timeout=60,
+        stage="health_check",
+    )
+    return {
+        "model": request.model,
+        "ok": result.get("ok", False),
+        "elapsed_seconds": result.get("elapsed_seconds"),
+        "attempts": result.get("attempts"),
+        "usage": result.get("usage"),
+        "error": result.get("error"),
     }
 
 
@@ -591,9 +636,14 @@ async def send_message_stream(
                 stage2_results,
                 label_to_model,
             )
+            consensus_metrics = calculate_consensus_metrics(
+                stage2_results,
+                label_to_model,
+            )
             turn_metadata = {
                 "label_to_model": label_to_model,
                 "aggregate_rankings": aggregate_rankings,
+                "consensus_metrics": consensus_metrics,
                 "models": models,
                 "chairman_model": chairman_model,
                 "review_profile": request.review_profile,

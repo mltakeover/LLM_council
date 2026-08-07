@@ -32,6 +32,8 @@ class ChairmanFinding(BaseModel):
 class ChairmanReport(BaseModel):
     executive_summary: str = Field(min_length=1)
     findings: List[ChairmanFinding] = Field(default_factory=list)
+    consensus: List[str] = Field(default_factory=list)
+    disagreements: List[str] = Field(default_factory=list)
     assumptions: List[str] = Field(default_factory=list)
     dependencies: List[str] = Field(default_factory=list)
     open_questions: List[str] = Field(default_factory=list)
@@ -50,6 +52,18 @@ def _history_messages(
 
 def _role_for_model(profile: ReviewProfile, index: int) -> str:
     return profile.reviewer_roles[index % len(profile.reviewer_roles)]
+
+
+def _add_usage(
+    total: Dict[str, int],
+    usage: Optional[Dict[str, Any]],
+) -> None:
+    if not usage:
+        return
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
+        value = usage.get(key)
+        if value is not None:
+            total[key] = total.get(key, 0) + int(value)
 
 
 def _stage1_system_prompt(profile: ReviewProfile, role: str) -> str:
@@ -116,6 +130,7 @@ async def _chunked_stage1_for_model(
     chunk_notes = []
     total_elapsed = 0.0
     total_attempts = 0
+    total_usage: Dict[str, int] = {}
     last_error = None
 
     async def retry_callback(event: Dict[str, Any]) -> None:
@@ -153,6 +168,7 @@ whole-document conclusion from this chunk alone."""
         )
         total_elapsed += float(result.get("elapsed_seconds") or 0)
         total_attempts += int(result.get("attempts") or 0)
+        _add_usage(total_usage, result.get("usage"))
         if result.get("ok"):
             chunk_notes.append(
                 f"[{chunk['filename']} chunk {chunk['index']}/{chunk['count']}]\n"
@@ -168,6 +184,7 @@ whole-document conclusion from this chunk alone."""
             "provider": model.split(":", 1)[0] if ":" in model else None,
             "content": "",
             "reasoning_details": None,
+            "usage": total_usage or None,
             "attempts": total_attempts,
             "elapsed_seconds": round(total_elapsed, 2),
             "error": last_error or {
@@ -213,6 +230,8 @@ the evidence. Do not assume that a missing item was present in another chunk.
         2,
     )
     result["attempts"] = total_attempts + int(result.get("attempts") or 0)
+    _add_usage(total_usage, result.get("usage"))
+    result["usage"] = total_usage or None
 
     if event_callback is not None:
         await event_callback({
@@ -290,6 +309,7 @@ async def stage1_collect_responses(
                 "response": response.get("content", ""),
                 "elapsed_seconds": response.get("elapsed_seconds"),
                 "attempts": response.get("attempts"),
+                "usage": response.get("usage"),
             })
     return stage1_results
 
@@ -403,6 +423,7 @@ Every available response must appear exactly once in ranking."""
             "ranking_valid": valid,
             "elapsed_seconds": response.get("elapsed_seconds"),
             "attempts": response.get("attempts"),
+            "usage": response.get("usage"),
         })
     return stage2_results, label_to_model
 
@@ -442,6 +463,54 @@ def calculate_aggregate_rankings(
     return aggregate
 
 
+def calculate_consensus_metrics(
+    stage2_results: List[Dict[str, Any]],
+    label_to_model: Dict[str, str],
+) -> Dict[str, Any]:
+    """Summarize peer-ranking agreement without claiming semantic consensus."""
+
+    valid_rankings = [
+        ranking.get("parsed_ranking") or []
+        for ranking in stage2_results
+        if ranking.get("ranking_valid") is True
+    ]
+    top_choices = [ranking[0] for ranking in valid_rankings if ranking]
+    if not top_choices:
+        return {
+            "valid_ranking_count": 0,
+            "top_choice_model": None,
+            "top_choice_votes": 0,
+            "top_choice_share": None,
+            "agreement_level": "insufficient",
+            "unanimous": False,
+        }
+
+    vote_counts: Dict[str, int] = defaultdict(int)
+    for label in top_choices:
+        vote_counts[label] += 1
+    winning_label, winning_votes = max(
+        vote_counts.items(),
+        key=lambda item: (item[1], item[0]),
+    )
+    share = winning_votes / len(top_choices)
+    if share == 1:
+        level = "unanimous"
+    elif share >= 0.67:
+        level = "strong"
+    elif share > 0.5:
+        level = "moderate"
+    else:
+        level = "split"
+    return {
+        "valid_ranking_count": len(valid_rankings),
+        "top_choice_model": label_to_model.get(winning_label),
+        "top_choice_votes": winning_votes,
+        "top_choice_share": round(share, 3),
+        "agreement_level": level,
+        "unanimous": share == 1,
+    }
+
+
 def _report_to_markdown(report: ChairmanReport) -> str:
     lines = ["## Executive summary", "", report.executive_summary, "", "## Findings"]
     if not report.findings:
@@ -458,6 +527,8 @@ def _report_to_markdown(report: ChairmanReport) -> str:
         ])
 
     for heading, values in (
+        ("Council consensus", report.consensus),
+        ("Council disagreements", report.disagreements),
         ("Assumptions", report.assumptions),
         ("Dependencies", report.dependencies),
         ("Open questions", report.open_questions),
@@ -523,6 +594,8 @@ Return JSON only. Use this exact top-level shape:
       "recommendation": "..."
     }}
   ],
+  "consensus": ["Points supported by multiple independent reviews"],
+  "disagreements": ["Material differences between council members"],
   "assumptions": ["..."],
   "dependencies": ["..."],
   "open_questions": ["..."],
@@ -553,6 +626,7 @@ Do not invent evidence. If evidence is insufficient, say so explicitly."""
             "response": "Unable to generate the final synthesis.",
             "success": False,
             "structured_report": None,
+            "usage": response.get("usage"),
             "error": response.get("error"),
             "elapsed_seconds": response.get("elapsed_seconds"),
             "attempts": response.get("attempts"),
@@ -579,6 +653,7 @@ Do not invent evidence. If evidence is insufficient, say so explicitly."""
         "structured_output_valid": structured_report is not None,
         "elapsed_seconds": response.get("elapsed_seconds"),
         "attempts": response.get("attempts"),
+        "usage": response.get("usage"),
     }
 
 
@@ -637,6 +712,7 @@ async def run_full_council(
         event_callback,
     )
     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+    consensus_metrics = calculate_consensus_metrics(stage2_results, label_to_model)
     stage3_result = await stage3_synthesize_final(
         user_query,
         stage1_results,
@@ -649,6 +725,7 @@ async def run_full_council(
     metadata = {
         "label_to_model": label_to_model,
         "aggregate_rankings": aggregate_rankings,
+        "consensus_metrics": consensus_metrics,
         "models": council_models,
         "chairman_model": active_chairman,
         "review_profile": review_profile,

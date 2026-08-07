@@ -1,0 +1,26 @@
+.provider-status-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px; background: rgba(15, 23, 42, .48); backdrop-filter: blur(3px); }
+.provider-status-panel { width: min(760px, 100%); max-height: min(760px, 88vh); overflow: auto; border: 1px solid #dbe3ef; border-radius: 16px; background: #fff; box-shadow: 0 24px 70px rgba(15,23,42,.28); }
+.provider-status-panel > header { position: sticky; top: 0; z-index: 2; padding: 18px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid #e2e8f0; background: rgba(255,255,255,.96); }
+.provider-status-panel h2, .provider-status-panel p { margin: 0; }
+.provider-status-panel h2 { margin-top: 3px; color: #172033; font-size: 20px; }
+.provider-status-panel header p { margin-top: 4px; color: #64748b; font-size: 12px; }
+.provider-status-actions { display: flex; gap: 7px; }
+.provider-status-actions button, .provider-status-card > button { padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #475569; cursor: pointer; font-size: 11px; font-weight: 700; }
+.provider-status-actions button:hover, .provider-status-card > button:hover { border-color: #818cf8; color: #4338ca; }
+.provider-status-actions .provider-status-close { width: 32px; padding: 0; font-size: 18px; }
+.provider-status-list { padding: 14px; display: grid; gap: 8px; }
+.provider-status-card { padding: 11px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, auto) auto; align-items: center; gap: 12px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+.provider-status-identity { min-width: 0; display: flex; align-items: center; gap: 9px; }
+.provider-status-identity strong, .provider-status-identity small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.provider-status-identity strong { color: #172033; font-size: 12px; }
+.provider-status-identity small { margin-top: 2px; color: #64748b; font-size: 10px; }
+.provider-status-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: #94a3b8; }
+.provider-status-dot--testing { background: #6366f1; animation: statusBlink 1s infinite; }
+.provider-status-dot--ok { background: #10b981; }
+.provider-status-dot--failed { background: #ef4444; }
+.provider-status-result { min-width: 0; display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.provider-status-result strong, .provider-status-result small { padding: 3px 6px; border-radius: 999px; background: #fff; color: #64748b; font-size: 9px; }
+.provider-status-result strong { color: #334155; }
+.provider-test-error { max-width: 190px; overflow: hidden; color: #b91c1c !important; text-overflow: ellipsis; white-space: nowrap; }
+.provider-status-empty { padding: 30px; color: #64748b; text-align: center; }
+@media (max-width: 650px) { .provider-status-backdrop { padding: 8px; } .provider-status-panel > header { flex-direction: column; } .provider-status-card { grid-template-columns: 1fr auto; } .provider-status-result { grid-column: 1 / -1; justify-content: flex-start; } }
