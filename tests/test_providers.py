@@ -186,3 +186,47 @@ async def test_rate_limit_error_is_retried(monkeypatch) -> None:
     assert result["ok"] is True
     assert calls == 2
     assert result["attempts"] == 2
+
+
+@pytest.mark.asyncio
+async def test_long_retry_after_stops_retrying_and_reports_the_wait(monkeypatch) -> None:
+    """A provider asking for longer than the ceiling must not stall the council.
+
+    Sleeping through it blocks every other seat; shortening it guarantees
+    another rejection. Failing with the wait time is the only useful option.
+    """
+
+    calls = 0
+
+    async def rate_limited(model_name, messages):
+        nonlocal calls
+        calls += 1
+        error = Exception(
+            "Error code: 429 - {'error': {'message': 'Rate limit reached.', "
+            "'code': 'rate_limit_exceeded'}}"
+        )
+        error.status_code = 429
+        error.response = type(
+            "R", (), {"status_code": 429, "headers": {"retry-after": "300"}, "text": ""}
+        )()
+        raise error
+
+    monkeypatch.setattr(providers, "_query_openai", rate_limited)
+    monkeypatch.setattr(providers, "PROVIDER_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(providers, "PROVIDER_RETRY_AFTER_MAX_SECONDS", 30)
+
+    result = await providers.query_model("openai:gpt-5.6-terra", [])
+
+    assert result["ok"] is False
+    assert calls == 1
+    assert result["error"]["retry_after_seconds"] == 300.0
+    assert result["error"]["retryable"] is False
+    assert "300" in result["error"]["fix"]
+
+
+def test_retry_delay_honours_retry_after_in_full(monkeypatch) -> None:
+    """Regression: the delay used to be clamped to PROVIDER_RETRY_MAX_SECONDS."""
+
+    monkeypatch.setattr(providers, "PROVIDER_RETRY_MAX_SECONDS", 8)
+
+    assert providers._retry_delay(1, retry_after=25) == 25.0

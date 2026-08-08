@@ -86,6 +86,18 @@ PROVIDER_RETRY_BASE_SECONDS = float(
 PROVIDER_RETRY_MAX_SECONDS = float(
     os.getenv("PROVIDER_RETRY_MAX_SECONDS", "8")
 )
+# The longest provider-requested wait worth honouring. Retry-After is a minimum,
+# so it is never shortened; if the provider asks for longer than this, the call
+# fails immediately and reports when the caller may retry.
+PROVIDER_RETRY_AFTER_MAX_SECONDS = float(
+    os.getenv("PROVIDER_RETRY_AFTER_MAX_SECONDS", "30")
+)
+# Provider error text can echo request content or account details, so it is kept
+# out of logs unless explicitly enabled for debugging.
+LOG_PROVIDER_MESSAGES = (
+    os.getenv("LOG_PROVIDER_MESSAGES", "false").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "300"))
 TITLE_TIMEOUT = float(os.getenv("TITLE_TIMEOUT", "90"))
 ANTHROPIC_MAX_TOKENS = int(
@@ -141,6 +153,9 @@ if PROVIDER_MAX_ATTEMPTS < 1:
 
 if PROVIDER_RETRY_BASE_SECONDS < 0 or PROVIDER_RETRY_MAX_SECONDS < 0:
     raise RuntimeError("Provider retry delays cannot be negative.")
+
+if PROVIDER_RETRY_AFTER_MAX_SECONDS < 0:
+    raise RuntimeError("PROVIDER_RETRY_AFTER_MAX_SECONDS cannot be negative.")
 
 
 API_KEYS = {
