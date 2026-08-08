@@ -189,3 +189,51 @@ def test_retry_after_rejects_unparseable_values() -> None:
 
     assert parse_retry_after_value("soon") is None
     assert parse_retry_after_value("") is None
+
+
+def test_retry_after_rejects_prose_containing_numbers() -> None:
+    """Regression: the duration pattern was unanchored.
+
+    A number lifted out of surrounding prose is not a wait instruction. Reading
+    8842 out of a reference number and treating it as a two-hour wait is worse
+    than ignoring the header and falling back to exponential backoff.
+    """
+
+    for value in (
+        "wait unknown-123-value",
+        "error-500-retry",
+        "Retry in a bit (ref 8842)",
+        "v2.1 endpoint",
+        "30s extra",
+        "please retry later 60",
+    ):
+        assert parse_retry_after_value(value) is None, value
+
+
+def test_retry_after_accepts_whole_valid_durations() -> None:
+    assert parse_retry_after_value("30") == 30.0
+    assert parse_retry_after_value("30.5") == 30.5
+    assert parse_retry_after_value("  45  ") == 45.0
+    assert parse_retry_after_value("2h") == 7200.0
+    assert parse_retry_after_value("1m 30s") == 90.0
+
+
+def test_retry_after_parsing_is_linear_on_hostile_input() -> None:
+    """Regression: validation used an ambiguous anchored repeating pattern.
+
+    `\\A(?:\\s*\\d+\\s*(?:ms|s|m|h)\\s*)+\\Z` lets the trailing and leading `\\s*`
+    match the same whitespace, so a near-miss input backtracked exponentially —
+    20 tokens took 270ms and each further pair quadrupled it. Header values are
+    parsed inside the async retry path, so this would stall the event loop.
+    """
+
+    import time
+
+    hostile = "1s " * 400 + "!"
+
+    started = time.perf_counter()
+    result = parse_retry_after_value(hostile)
+    elapsed = time.perf_counter() - started
+
+    assert result is None
+    assert elapsed < 0.5, f"parsing took {elapsed:.3f}s, expected linear time"
