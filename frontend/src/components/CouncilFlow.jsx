@@ -32,17 +32,42 @@ function statusText(status) {
   }[status] || 'Waiting';
 }
 
+const ERROR_TITLES = {
+  authentication: 'Authentication failed',
+  rate_limit: 'Rate limited',
+  quota_exhausted: 'Out of credit',
+  model_not_found: 'Model not found',
+  provider_unavailable: 'Provider unavailable',
+  context_length: 'Input too long',
+  content_filter: 'Blocked by content filter',
+  timeout: 'Timed out',
+  connection: 'Could not connect',
+  invalid_request: 'Invalid request',
+  configuration: 'Configuration problem',
+  empty_response: 'Empty response',
+  provider_error: 'Provider error',
+};
+
+function errorTitle(error) {
+  if (!error) return 'Provider error';
+  const title = ERROR_TITLES[error.code];
+  if (title) {
+    return error.retryable === false ? `${title} — retrying will not help` : title;
+  }
+  return error.code || 'Provider error';
+}
+
 function tokenText(usage) {
   if (!usage?.total_tokens) return null;
   return `${usage.total_tokens.toLocaleString()} tokens`;
 }
 
 function StageStatus({ label, status = 'pending', attempts, elapsed, usage, error }) {
-  const detail = error?.message
+  const detail = (error && (ERROR_TITLES[error.code] || error.message))
     || (elapsed != null ? `${elapsed}s${attempts ? ` · ${attempts} attempt${attempts === 1 ? '' : 's'}` : ''}${tokenText(usage) ? ` · ${tokenText(usage)}` : ''}` : null)
     || (attempts ? `Attempt ${attempts}` : null);
   return (
-    <div className={`flow-stage-wrap flow-stage-wrap--${status}`} title={error?.message || undefined}>
+    <div className={`flow-stage-wrap flow-stage-wrap--${status}`} title={error ? [error.cause, error.fix, error.message].filter(Boolean).join('\n\n') : undefined}>
       <div className={`flow-stage flow-stage--${status}`}>
         <span className="flow-stage-indicator" aria-hidden="true" />
         <span className="flow-stage-label">{label}</span>
@@ -91,8 +116,19 @@ function RunDetails({ node, onClose }) {
               </dl>
               {error && (
                 <div className="flow-detail-error" role="alert">
-                  <strong>{error.code || 'Provider error'}</strong>
-                  <span>{error.message}</span>
+                  <strong>{errorTitle(error)}</strong>
+                  {error.cause && <span className="flow-detail-error-cause">{error.cause}</span>}
+                  {error.fix && (
+                    <span className="flow-detail-error-fix">
+                      <em>How to fix:</em> {error.fix}
+                    </span>
+                  )}
+                  {error.message && (
+                    <details className="flow-detail-error-raw">
+                      <summary>Provider response</summary>
+                      <code>{error.message}</code>
+                    </details>
+                  )}
                 </div>
               )}
             </section>

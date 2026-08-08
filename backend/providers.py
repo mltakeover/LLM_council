@@ -25,6 +25,12 @@ from .config import (
     PROVIDER_RETRY_MAX_SECONDS,
     REQUEST_TIMEOUT,
 )
+from .errors import (
+    DIAGNOSES,
+    diagnose,
+    extract_provider_message,
+    extract_retry_after,
+)
 
 Message = Dict[str, str]
 ModelResult = Dict[str, Any]
@@ -379,55 +385,57 @@ def _status_code(exc: Exception) -> Optional[int]:
 
 
 def _error_details(exc: Exception) -> Dict[str, Any]:
+    """Classify a provider exception into an actionable, structured error.
+
+    Exception *type* wins where it is unambiguous (timeouts, network errors,
+    configuration mistakes). Everything else is delegated to `diagnose`, which
+    reads the provider's message body before falling back to the status code —
+    that is what separates a 429 meaning "slow down" from a 429 meaning "your
+    account is out of credit".
+    """
+
     status_code = _status_code(exc)
     exception_name = type(exc).__name__
     lowered_name = exception_name.lower()
 
     if isinstance(exc, (asyncio.TimeoutError, httpx.TimeoutException)):
-        code = "timeout"
-        retryable = True
-    elif status_code == 429:
-        code = "rate_limit"
-        retryable = True
-    elif status_code in {500, 502, 503, 504}:
-        code = "provider_unavailable"
-        retryable = True
-    elif status_code in {401, 403}:
-        code = "authentication"
-        retryable = False
-    elif status_code == 404:
-        code = "model_not_found"
-        retryable = False
-    elif status_code == 400:
-        code = "invalid_request"
-        retryable = False
+        diagnosis = DIAGNOSES["timeout"]
     elif (
         isinstance(exc, (httpx.NetworkError, ConnectionError, OSError))
         or "connection" in lowered_name
     ):
-        code = "connection"
-        retryable = True
-    elif isinstance(exc, ValueError):
-        code = "configuration"
-        retryable = False
+        diagnosis = DIAGNOSES["connection"]
+    elif isinstance(exc, ValueError) and status_code is None:
+        diagnosis = DIAGNOSES["configuration"]
     else:
-        code = "provider_error"
-        retryable = False
+        diagnosis = diagnose(exc, status_code)
 
-    message = " ".join(str(exc).split())[:500]
+    message = extract_provider_message(exc)[:500]
     if not message:
         message = exception_name
 
     return {
-        "code": code,
+        "code": diagnosis.code,
         "message": message,
-        "retryable": retryable,
+        "cause": diagnosis.cause,
+        "fix": diagnosis.fix,
+        "retryable": diagnosis.retryable,
         "status_code": status_code,
         "exception_type": exception_name,
+        "retry_after_seconds": extract_retry_after(exc),
     }
 
 
-def _retry_delay(attempt: int) -> float:
+def _retry_delay(attempt: int, retry_after: Optional[float] = None) -> float:
+    """Exponential backoff with jitter, unless the provider named its own wait.
+
+    Jitter matters because council models run concurrently: without it, seats
+    sharing a provider retry in lockstep and collide again.
+    """
+
+    if retry_after is not None and retry_after > 0:
+        return round(min(retry_after, PROVIDER_RETRY_MAX_SECONDS), 3)
+
     base = PROVIDER_RETRY_BASE_SECONDS * (2 ** max(0, attempt - 1))
     capped = min(base, PROVIDER_RETRY_MAX_SECONDS)
     return round(capped + random.uniform(0, capped * 0.2), 3)
@@ -504,9 +512,12 @@ async def query_model(
     last_error: Dict[str, Any] = {
         "code": "provider_error",
         "message": "Provider request failed.",
+        "cause": DIAGNOSES["provider_error"].cause,
+        "fix": DIAGNOSES["provider_error"].fix,
         "retryable": False,
         "status_code": None,
         "exception_type": "UnknownError",
+        "retry_after_seconds": None,
     }
 
     attempts_made = 0
@@ -546,6 +557,14 @@ async def query_model(
             if str(exc) == "Provider returned an empty response.":
                 last_error["code"] = "empty_response"
                 last_error["retryable"] = True
+                last_error["cause"] = (
+                    "The model returned an empty response. Small local models do "
+                    "this when a prompt is too long or too complex for them."
+                )
+                last_error["fix"] = (
+                    "Retried automatically. If it persists, shorten the input or "
+                    "move this seat to a larger model."
+                )
 
             logger.warning(
                 "Provider call failed model=%s stage=%s attempt=%s/%s "
@@ -566,7 +585,7 @@ async def query_model(
             if not can_retry:
                 break
 
-            delay = _retry_delay(attempt)
+            delay = _retry_delay(attempt, last_error.get("retry_after_seconds"))
             await _emit(
                 event_callback,
                 "model_retrying",
