@@ -16,11 +16,13 @@ from openai import AsyncOpenAI
 from .config import (
     ANTHROPIC_MAX_TOKENS,
     API_KEYS,
+    LOG_PROVIDER_MESSAGES,
     OLLAMA_BASE_URL,
     OLLAMA_DISCOVERY_TIMEOUT,
     OLLAMA_ENDPOINT_IS_LOCAL,
     OLLAMA_MAX_CONCURRENCY,
     PROVIDER_MAX_ATTEMPTS,
+    PROVIDER_RETRY_AFTER_MAX_SECONDS,
     PROVIDER_RETRY_BASE_SECONDS,
     PROVIDER_RETRY_MAX_SECONDS,
     REQUEST_TIMEOUT,
@@ -427,18 +429,38 @@ def _error_details(exc: Exception) -> Dict[str, Any]:
 
 
 def _retry_delay(attempt: int, retry_after: Optional[float] = None) -> float:
-    """Exponential backoff with jitter, unless the provider named its own wait.
+    """Return how long to wait before the next attempt.
 
-    Jitter matters because council models run concurrently: without it, seats
-    sharing a provider retry in lockstep and collide again.
+    Retry-After is a *minimum* the provider is asking for, so it is honoured in
+    full rather than clamped down to the local backoff ceiling. Clamping it
+    guarantees the retry arrives too early and is rejected again. Waits longer
+    than PROVIDER_RETRY_AFTER_MAX_SECONDS are refused by `_retry_after_exceeds_limit`
+    before this function is called.
+
+    Jitter matters on the calculated path because council models run
+    concurrently: without it, seats sharing a provider retry in lockstep and
+    collide again.
     """
 
     if retry_after is not None and retry_after > 0:
-        return round(min(retry_after, PROVIDER_RETRY_MAX_SECONDS), 3)
+        return round(retry_after, 3)
 
     base = PROVIDER_RETRY_BASE_SECONDS * (2 ** max(0, attempt - 1))
     capped = min(base, PROVIDER_RETRY_MAX_SECONDS)
     return round(capped + random.uniform(0, capped * 0.2), 3)
+
+
+def _retry_after_exceeds_limit(retry_after: Optional[float]) -> bool:
+    """True when the provider's requested wait is too long to sit through.
+
+    Blocking a council run for minutes is worse than failing fast, so the caller
+    is told when it may retry instead.
+    """
+
+    return (
+        retry_after is not None
+        and retry_after > PROVIDER_RETRY_AFTER_MAX_SECONDS
+    )
 
 
 async def query_model(
@@ -566,17 +588,39 @@ async def query_model(
                     "move this seat to a larger model."
                 )
 
+            # Provider error text can echo request content or account details,
+            # so it is excluded unless LOG_PROVIDER_MESSAGES is set for debugging.
             logger.warning(
                 "Provider call failed model=%s stage=%s attempt=%s/%s "
-                "code=%s status=%s error=%s",
+                "code=%s status=%s exception=%s",
                 model,
                 stage_name,
                 attempt,
                 PROVIDER_MAX_ATTEMPTS,
                 last_error["code"],
                 last_error["status_code"],
-                last_error["message"],
+                last_error["exception_type"],
             )
+            if LOG_PROVIDER_MESSAGES:
+                logger.debug(
+                    "Provider message model=%s stage=%s message=%s",
+                    model,
+                    stage_name,
+                    last_error["message"],
+                )
+
+            requested_wait = last_error.get("retry_after_seconds")
+            if _retry_after_exceeds_limit(requested_wait):
+                # Honouring this would stall the whole council, and shortening it
+                # would only earn another rejection, so surface it instead.
+                last_error["retryable"] = False
+                last_error["fix"] = (
+                    f"The provider asked to wait {round(requested_wait)}s, which "
+                    f"exceeds PROVIDER_RETRY_AFTER_MAX_SECONDS "
+                    f"({round(PROVIDER_RETRY_AFTER_MAX_SECONDS)}s). Retry after that "
+                    "period, or raise the setting in .env to wait automatically."
+                )
+                break
 
             can_retry = (
                 last_error["retryable"]

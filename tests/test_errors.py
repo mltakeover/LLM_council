@@ -4,6 +4,7 @@ from backend.errors import (
     diagnose,
     extract_provider_message,
     extract_retry_after,
+    parse_retry_after_value,
 )
 
 
@@ -136,3 +137,55 @@ def test_retry_after_header_is_read() -> None:
 
 def test_retry_after_is_none_when_absent() -> None:
     assert extract_retry_after(FakeProviderError(RATE_LIMIT_429, 429)) is None
+
+
+def test_retry_after_plain_seconds() -> None:
+    exc = FakeProviderError(RATE_LIMIT_429, 429, {"retry-after": "30"})
+
+    assert extract_retry_after(exc) == 30.0
+
+
+def test_retry_after_is_not_shortened_by_the_backoff_cap() -> None:
+    """Regression: Retry-After is a minimum, not a target.
+
+    Clamping a 30s request down to an 8s backoff ceiling guarantees the retry
+    arrives early and is rejected again.
+    """
+
+    exc = FakeProviderError(RATE_LIMIT_429, 429, {"retry-after": "45"})
+
+    assert extract_retry_after(exc) == 45.0
+
+
+def test_retry_after_accepts_an_http_date() -> None:
+    from datetime import datetime, timedelta, timezone
+    from email.utils import format_datetime
+
+    when = datetime.now(timezone.utc) + timedelta(seconds=60)
+    exc = FakeProviderError(RATE_LIMIT_429, 429, {"retry-after": format_datetime(when)})
+
+    seconds = extract_retry_after(exc)
+
+    assert seconds is not None
+    assert 55 <= seconds <= 61
+
+
+def test_retry_after_http_date_in_the_past_is_zero() -> None:
+    exc = FakeProviderError(
+        RATE_LIMIT_429, 429, {"retry-after": "Wed, 21 Oct 2015 07:28:00 GMT"}
+    )
+
+    assert extract_retry_after(exc) == 0.0
+
+
+def test_retry_after_parses_compound_and_subsecond_durations() -> None:
+    assert parse_retry_after_value("1m30s") == 90.0
+    assert parse_retry_after_value("250ms") == 0.25
+    assert parse_retry_after_value("2.5s") == 2.5
+
+
+def test_retry_after_rejects_unparseable_values() -> None:
+    """Falling back to backoff is safer than inventing a wait."""
+
+    assert parse_retry_after_value("soon") is None
+    assert parse_retry_after_value("") is None

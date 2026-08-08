@@ -18,6 +18,8 @@ import ast
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Optional, Tuple
 
 
@@ -260,22 +262,88 @@ def _dig_message(payload: Any) -> str:
     return ""
 
 
+_DURATION_PATTERN = re.compile(
+    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>ms|s|m|h)?",
+    re.IGNORECASE,
+)
+
+_UNIT_SECONDS = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0, None: 1.0}
+
+
+def parse_retry_after_value(value: str) -> Optional[float]:
+    """Parse one Retry-After style value into seconds.
+
+    Three formats occur in the wild and all three must be handled:
+
+    * plain seconds — ``"30"``
+    * an HTTP-date, per RFC 9110 — ``"Wed, 21 Oct 2026 07:28:00 GMT"``
+    * compound or sub-second durations used by rate-limit reset headers —
+      ``"1m30s"``, ``"250ms"``
+
+    Returning ``None`` for an unparseable value is deliberate: guessing a wait
+    is worse than falling back to exponential backoff.
+    """
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    try:
+        seconds = float(text)
+    except ValueError:
+        pass
+    else:
+        return seconds if seconds >= 0 else None
+
+    # parsedate_to_datetime returns None on some versions and raises on others,
+    # so both outcomes are treated as "not a date".
+    try:
+        parsed_date = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        parsed_date = None
+
+    if parsed_date is not None:
+        if parsed_date.tzinfo is None:
+            parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+        delta = (parsed_date - datetime.now(timezone.utc)).total_seconds()
+        return max(delta, 0.0)
+
+    total = 0.0
+    matched = False
+    for match in _DURATION_PATTERN.finditer(text):
+        raw = match.group("value")
+        if not raw:
+            continue
+        unit = (match.group("unit") or "").lower() or None
+        total += float(raw) * _UNIT_SECONDS[unit]
+        matched = True
+
+    return total if matched else None
+
+
 def extract_retry_after(exc: BaseException) -> Optional[float]:
-    """Return the provider's requested wait in seconds, when it sends one."""
+    """Return the provider's requested wait in seconds, when it sends one.
+
+    Retry-After is a *minimum* wait. Callers must not shorten it — retrying
+    early simply earns another rejection.
+    """
 
     headers = getattr(getattr(exc, "response", None), "headers", None)
     if headers is None or not hasattr(headers, "get"):
         return None
 
-    for header in ("retry-after", "x-ratelimit-reset-requests"):
-        value = headers.get(header)
-        if not value:
+    for header in (
+        "retry-after",
+        "Retry-After",
+        "x-ratelimit-reset-requests",
+        "x-ratelimit-reset-tokens",
+        "anthropic-ratelimit-requests-reset",
+    ):
+        raw = headers.get(header)
+        if not raw:
             continue
-        try:
-            seconds = float(str(value).strip().rstrip("s"))
-        except (TypeError, ValueError):
-            continue
-        if seconds >= 0:
+        seconds = parse_retry_after_value(raw)
+        if seconds is not None:
             return seconds
     return None
 
