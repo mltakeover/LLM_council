@@ -262,12 +262,20 @@ def _dig_message(payload: Any) -> str:
     return ""
 
 
-_DURATION_PATTERN = re.compile(
-    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>ms|s|m|h)?",
+# A single "<number><unit>" token. The unit is required, so this cannot match a
+# bare number lifted out of surrounding prose.
+#
+# Validation deliberately does not use an anchored repeating pattern such as
+# `\A(?:\s*\d+\s*(?:ms|s|m|h)\s*)+\Z`. The trailing and leading `\s*` in that
+# form can both match the same whitespace, making the group ambiguous and the
+# match exponential on input that ultimately fails. Coverage is checked by
+# scanning the token spans instead, which is linear.
+_DURATION_TOKEN = re.compile(
+    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>ms|s|m|h)",
     re.IGNORECASE,
 )
 
-_UNIT_SECONDS = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0, None: 1.0}
+_UNIT_SECONDS = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}
 
 
 def parse_retry_after_value(value: str) -> Optional[float]:
@@ -279,6 +287,10 @@ def parse_retry_after_value(value: str) -> Optional[float]:
     * an HTTP-date, per RFC 9110 — ``"Wed, 21 Oct 2026 07:28:00 GMT"``
     * compound or sub-second durations used by rate-limit reset headers —
       ``"1m30s"``, ``"250ms"``
+
+    A value is only accepted when the *entire* string is a valid duration.
+    Provider headers are not user input, but they are not schema-checked either,
+    and a number lifted out of surrounding prose is not a wait instruction.
 
     Returning ``None`` for an unparseable value is deliberate: guessing a wait
     is worse than falling back to exponential backoff.
@@ -308,17 +320,25 @@ def parse_retry_after_value(value: str) -> Optional[float]:
         delta = (parsed_date - datetime.now(timezone.utc)).total_seconds()
         return max(delta, 0.0)
 
-    total = 0.0
-    matched = False
-    for match in _DURATION_PATTERN.finditer(text):
-        raw = match.group("value")
-        if not raw:
-            continue
-        unit = (match.group("unit") or "").lower() or None
-        total += float(raw) * _UNIT_SECONDS[unit]
-        matched = True
+    # Every non-whitespace character must belong to a duration token. Anything
+    # left over means this is prose that happens to contain a number, not a
+    # wait instruction. Scanning spans keeps this linear in the input length.
+    tokens = list(_DURATION_TOKEN.finditer(text))
+    if not tokens:
+        return None
 
-    return total if matched else None
+    position = 0
+    total = 0.0
+    for match in tokens:
+        if text[position:match.start()].strip():
+            return None
+        total += float(match.group("value")) * _UNIT_SECONDS[match.group("unit").lower()]
+        position = match.end()
+
+    if text[position:].strip():
+        return None
+
+    return total
 
 
 def extract_retry_after(exc: BaseException) -> Optional[float]:
