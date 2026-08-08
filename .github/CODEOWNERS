@@ -1,0 +1,13 @@
+# Every file requires review by the repository owner.
+# Combined with "Require review from Code Owners" in branch protection, this
+# means no pull request can merge without explicit approval.
+*       @mltakeover
+
+# Paths where a malicious change would be hardest to spot and most damaging.
+# Listed separately so they stand out in the review UI.
+/.github/workflows/    @mltakeover
+/backend/providers.py  @mltakeover
+/backend/config.py     @mltakeover
+/pyproject.toml        @mltakeover
+/frontend/package.json @mltakeover
+/frontend/package-lock.json @mltakeover
