@@ -84,7 +84,8 @@ documents and retries add calls; the UI presents an estimate before sending.
 - Runtime discovery of locally downloaded Ollama models
 - Direct OpenAI, Anthropic, Google Gemini, and xAI clients
 - Configurable council membership, Chairman, mode, context, and per-model roles
-- Structured provider errors, bounded retries, timeouts, and privacy-safe logs
+- Diagnosed provider errors with cause and fix guidance, selective retries,
+  timeouts, and privacy-safe logs
 - Stream guard when every Stage 1 model fails
 - Cancellable, idempotent runs with persisted failure state and safe retry
 - Live per-model started, retrying, completed, and failed events
@@ -291,10 +292,20 @@ DATABASE_PATH=data/llm_council.db
 APP_HOST=127.0.0.1
 ```
 
-Timeouts, connection failures, rate limits, and common provider 5xx responses
-are retryable. Authentication, unknown-model, and invalid-request errors fail
-immediately. Logs contain bounded operational details, not prompts, API keys,
-document contents, or full provider responses.
+Retries are limited to failures a retry could actually fix: timeouts,
+connection failures, rate limits, empty responses, and common provider 5xx
+responses. Authentication, exhausted quota, unknown models, oversized inputs,
+content-filter blocks, and invalid requests fail immediately.
+
+Rate limits and exhausted quota both arrive as HTTP 429, so the provider's
+message body is inspected before the status code is trusted. Retrying a billing
+failure can never succeed, and treating it as a rate limit only delays a clear
+answer by the full backoff period. When a provider sends `Retry-After`, that
+value is used instead of the calculated backoff.
+
+Every failure carries a machine-readable `code`, a plain-English `cause`, and a
+`fix` naming the setting to change. Logs contain bounded operational details,
+not prompts, API keys, document contents, or full provider responses.
 
 ## Run the app
 
@@ -436,6 +447,41 @@ Provider progress events are `model_started`, `model_retrying`,
 `model_completed`, and `model_failed`. Terminal stream events are `complete` or
 a structured `error`.
 
+A structured error has the shape:
+
+```json
+{
+  "code": "quota_exhausted",
+  "message": "You exceeded your current quota, please check your plan and billing details.",
+  "cause": "The account has no remaining credit or has hit a hard spend cap...",
+  "fix": "Top up the credit balance or raise the spend cap in the provider's dashboard...",
+  "retryable": false,
+  "status_code": 429,
+  "exception_type": "RateLimitError",
+  "retry_after_seconds": null
+}
+```
+
+`code` is stable and safe to branch on. `cause` and `fix` are written for
+display to the user. `message` is the provider's own text, unwrapped from its
+envelope. Codes are defined in `backend/errors.py`:
+
+| Code | Retryable |
+|---|---|
+| `rate_limit` | yes |
+| `timeout` | yes |
+| `connection` | yes |
+| `provider_unavailable` | yes |
+| `empty_response` | yes |
+| `quota_exhausted` | no |
+| `authentication` | no |
+| `model_not_found` | no |
+| `context_length` | no |
+| `content_filter` | no |
+| `invalid_request` | no |
+| `configuration` | no |
+| `provider_error` | no |
+
 ## Development and tests
 
 Install test tools:
@@ -499,9 +545,26 @@ its model ID is valid for the account. Restart the backend after `.env` changes.
 
 ### Every Stage 1 model fails
 
-The run stops before peer evaluation and returns `all_models_failed`. Inspect
-the model details or backend log for codes such as `timeout`, `connection`,
-`authentication`, `model_not_found`, or `rate_limit`.
+The run stops before peer evaluation and returns `all_models_failed`. Open the
+model node in the council flow: each failed stage shows the cause, how to fix
+it, and the provider's full response behind **Provider response**.
+
+If every model failed with the same code, there is one problem rather than
+several — usually a missing key, an unreachable Ollama, or an exhausted account.
+
+### A cloud model fails with `quota_exhausted`
+
+The account has no credit left, or has hit a spend cap. This is not a rate
+limit, and it is not retried, because waiting cannot clear it. Top up in the
+provider's dashboard, or drop that provider from `COUNCIL_PROVIDERS` and carry
+on with the local Ollama models.
+
+### A model fails with `context_length`
+
+The prompt plus attached documents exceeded that model's window. Local models
+have far smaller windows than cloud ones, so this usually appears on Ollama
+seats first. Lower `MAX_CONTEXT_CHARACTERS` or `MAX_DOCUMENT_CHUNKS`, attach
+fewer documents, or give that seat a longer-context model.
 
 ### A retry says the run is still active
 
