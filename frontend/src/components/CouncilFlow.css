@@ -674,11 +674,43 @@
   margin-top: 8px;
   padding: 8px;
   display: grid;
-  gap: 2px;
+  gap: 4px;
   border-radius: 7px;
   background: #fee2e2;
   color: #991b1b;
   font-size: 0.65rem;
+  /* Guidance must wrap. Clipping it is what made the original 429 unreadable. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.flow-detail-error-cause {
+  line-height: 1.45;
+}
+
+.flow-detail-error-fix {
+  line-height: 1.45;
+  padding-top: 2px;
+  border-top: 1px solid rgba(153, 27, 27, 0.2);
+}
+
+.flow-detail-error-fix em {
+  font-style: normal;
+  font-weight: 600;
+}
+
+.flow-detail-error-raw summary {
+  cursor: pointer;
+  opacity: 0.75;
+  padding-top: 2px;
+}
+
+.flow-detail-error-raw code {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.62rem;
+  line-height: 1.4;
+  opacity: 0.85;
 }
 
 @keyframes packetFlow {

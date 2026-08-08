@@ -68,7 +68,7 @@ async def test_query_model_retries_then_emits_completion(monkeypatch) -> None:
 
     monkeypatch.setattr(providers, "_query_ollama", flaky_query)
     monkeypatch.setattr(providers, "PROVIDER_MAX_ATTEMPTS", 2)
-    monkeypatch.setattr(providers, "_retry_delay", lambda _attempt: 0)
+    monkeypatch.setattr(providers, "_retry_delay", lambda *_args, **_kwargs: 0)
 
     result = await providers.query_model(
         "ollama:test-model",
@@ -103,13 +103,15 @@ async def test_query_model_returns_structured_timeout(monkeypatch) -> None:
 
     assert result["ok"] is False
     assert result["attempts"] == 1
-    assert result["error"] == {
-        "code": "timeout",
-        "message": "too slow",
-        "retryable": True,
-        "status_code": None,
-        "exception_type": "TimeoutError",
-    }
+    assert result["error"]["code"] == "timeout"
+    assert result["error"]["message"] == "too slow"
+    assert result["error"]["retryable"] is True
+    assert result["error"]["status_code"] is None
+    assert result["error"]["exception_type"] == "TimeoutError"
+    assert result["error"]["retry_after_seconds"] is None
+    # Errors now carry user-facing guidance alongside the machine-readable code.
+    assert result["error"]["cause"]
+    assert result["error"]["fix"]
 
 
 @pytest.mark.asyncio
@@ -122,3 +124,65 @@ async def test_query_model_rejects_unknown_provider_without_retry() -> None:
     assert result["ok"] is False
     assert result["attempts"] == 0
     assert result["error"]["code"] == "configuration"
+
+
+@pytest.mark.asyncio
+async def test_quota_error_is_not_retried(monkeypatch) -> None:
+    """A billing 429 must fail on the first attempt.
+
+    Retrying wastes PROVIDER_MAX_ATTEMPTS and the full backoff delay on a
+    condition that only a credit top-up can clear.
+    """
+
+    calls = 0
+
+    async def failing_query(model_name, messages):
+        nonlocal calls
+        calls += 1
+        error = Exception(
+            "Error code: 429 - {'error': {'message': 'You exceeded your current "
+            "quota, please check your plan and billing details.', 'code': "
+            "'insufficient_quota'}}"
+        )
+        error.status_code = 429
+        raise error
+
+    monkeypatch.setattr(providers, "_query_openai", failing_query)
+    monkeypatch.setattr(providers, "PROVIDER_MAX_ATTEMPTS", 3)
+
+    result = await providers.query_model("openai:gpt-5.6-terra", [])
+
+    assert result["ok"] is False
+    assert calls == 1
+    assert result["error"]["code"] == "quota_exhausted"
+    assert result["error"]["retryable"] is False
+    assert result["error"]["fix"]
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_error_is_retried(monkeypatch) -> None:
+    """The counterpart: an identical status code that should be retried."""
+
+    calls = 0
+
+    async def flaky_query(model_name, messages):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            error = Exception(
+                "Error code: 429 - {'error': {'message': 'Rate limit reached "
+                "for gpt-5.6-terra.', 'code': 'rate_limit_exceeded'}}"
+            )
+            error.status_code = 429
+            raise error
+        return {"content": "ok", "usage": None}
+
+    monkeypatch.setattr(providers, "_query_openai", flaky_query)
+    monkeypatch.setattr(providers, "PROVIDER_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(providers, "_retry_delay", lambda *_args, **_kwargs: 0)
+
+    result = await providers.query_model("openai:gpt-5.6-terra", [])
+
+    assert result["ok"] is True
+    assert calls == 2
+    assert result["attempts"] == 2
