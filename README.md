@@ -290,6 +290,11 @@ UPLOAD_MAX_BYTES=20971520
 DOCUMENT_CHUNK_CHARACTERS=12000
 DOCUMENT_CHUNK_OVERLAP=500
 MAX_DOCUMENT_CHUNKS=12
+MAX_EXTRACTED_CHARACTERS=2000000
+MAX_UNCOMPRESSED_BYTES=83886080
+MAX_COMPRESSION_RATIO=120
+MAX_PDF_PAGES=500
+EXTRACTION_TIMEOUT_SECONDS=30
 
 DATABASE_PATH=data/llm_council.db
 APP_HOST=127.0.0.1
@@ -315,6 +320,15 @@ council seat.
 Every failure carries a machine-readable `code`, a plain-English `cause`, and a
 `fix` naming the setting to change. Logs contain bounded operational details,
 not prompts, API keys, document contents, or full provider responses.
+
+Uploads are bounded twice. `UPLOAD_MAX_BYTES` limits the compressed file, and
+`MAX_UNCOMPRESSED_BYTES`, `MAX_COMPRESSION_RATIO`, `MAX_PDF_PAGES` and
+`MAX_EXTRACTED_CHARACTERS` limit what extraction is allowed to produce. A DOCX
+is a ZIP archive whose central directory declares uncompressed sizes, so an
+over-expanding document is refused before anything is decompressed.
+
+Extraction runs in a worker thread with an `EXTRACTION_TIMEOUT_SECONDS` ceiling,
+so a slow document cannot block the event loop and stall active council runs.
 
 ## Run the app
 

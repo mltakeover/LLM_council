@@ -77,6 +77,21 @@ DOCUMENT_CHUNK_OVERLAP = int(
 )
 MAX_DOCUMENT_CHUNKS = int(os.getenv("MAX_DOCUMENT_CHUNKS", "12"))
 
+# The upload limit bounds the compressed input only. A well-formed DOCX is a ZIP
+# archive and a PDF can carry compressed streams, so both can expand by orders
+# of magnitude. These bound what extraction is allowed to produce.
+MAX_EXTRACTED_CHARACTERS = int(
+    os.getenv("MAX_EXTRACTED_CHARACTERS", str(2_000_000))
+)
+MAX_UNCOMPRESSED_BYTES = int(
+    os.getenv("MAX_UNCOMPRESSED_BYTES", str(80 * 1024 * 1024))
+)
+MAX_COMPRESSION_RATIO = float(os.getenv("MAX_COMPRESSION_RATIO", "120"))
+MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "500"))
+EXTRACTION_TIMEOUT_SECONDS = float(
+    os.getenv("EXTRACTION_TIMEOUT_SECONDS", "30")
+)
+
 PROVIDER_MAX_ATTEMPTS = int(
     os.getenv("PROVIDER_MAX_ATTEMPTS", "3")
 )
@@ -147,6 +162,21 @@ if not 0 <= DOCUMENT_CHUNK_OVERLAP < DOCUMENT_CHUNK_CHARACTERS:
 
 if MAX_DOCUMENT_CHUNKS < 1:
     raise RuntimeError("MAX_DOCUMENT_CHUNKS must be at least 1.")
+
+if MAX_EXTRACTED_CHARACTERS < 1000:
+    raise RuntimeError("MAX_EXTRACTED_CHARACTERS must be at least 1000.")
+
+if MAX_UNCOMPRESSED_BYTES < 1:
+    raise RuntimeError("MAX_UNCOMPRESSED_BYTES must be at least 1.")
+
+if MAX_COMPRESSION_RATIO < 1:
+    raise RuntimeError("MAX_COMPRESSION_RATIO must be at least 1.")
+
+if MAX_PDF_PAGES < 1:
+    raise RuntimeError("MAX_PDF_PAGES must be at least 1.")
+
+if EXTRACTION_TIMEOUT_SECONDS <= 0:
+    raise RuntimeError("EXTRACTION_TIMEOUT_SECONDS must be positive.")
 
 if PROVIDER_MAX_ATTEMPTS < 1:
     raise RuntimeError("PROVIDER_MAX_ATTEMPTS must be at least 1.")

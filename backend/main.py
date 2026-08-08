@@ -18,6 +18,7 @@ from .config import (
     AVAILABLE_CLOUD_MODELS,
     CHAIRMAN_MODEL,
     COUNCIL_MODELS,
+    EXTRACTION_TIMEOUT_SECONDS,
     MAX_CONTEXT_CHARACTERS,
     MAX_COUNCIL_MODELS,
     MAX_DOCUMENTS_PER_MESSAGE,
@@ -678,7 +679,26 @@ async def upload_document(
         raise HTTPException(status_code=404, detail="Conversation not found")
     data = await file.read(UPLOAD_MAX_BYTES + 1)
     try:
-        extracted = extract_document(file.filename or "document", data)
+        # Extraction is CPU-bound and can take seconds on a large document.
+        # Running it inline would block the event loop, stalling every other
+        # request including active council streams, so it goes to a worker
+        # thread with a hard timeout.
+        extracted = await asyncio.wait_for(
+            asyncio.to_thread(
+                extract_document,
+                file.filename or "document",
+                data,
+            ),
+            timeout=EXTRACTION_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Extraction exceeded {EXTRACTION_TIMEOUT_SECONDS:.0f} seconds "
+                "and was abandoned. The document is too complex to process."
+            ),
+        ) from exc
     except DocumentExtractionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return await storage.create_document(conversation_id, extracted)
