@@ -126,6 +126,7 @@ LLM_council/
 │   ├── council.py           # Three-stage orchestration and adaptive reports
 │   ├── council_modes.py     # Modes, local routing, and member roles
 │   ├── documents.py         # Extraction and bounded chunking
+│   ├── errors.py            # Provider error diagnosis, causes, and fixes
 │   ├── evaluations.py       # General-purpose regression catalogue
 │   ├── main.py              # FastAPI routes and SSE stream
 │   ├── providers.py         # Direct provider clients, retries, and events
@@ -277,6 +278,8 @@ Optional `.env` settings and their defaults include:
 PROVIDER_MAX_ATTEMPTS=3
 PROVIDER_RETRY_BASE_SECONDS=1
 PROVIDER_RETRY_MAX_SECONDS=8
+PROVIDER_RETRY_AFTER_MAX_SECONDS=30
+LOG_PROVIDER_MESSAGES=false
 
 MAX_COUNCIL_MODELS=8
 MAX_PROMPT_CHARACTERS=100000
@@ -300,8 +303,14 @@ content-filter blocks, and invalid requests fail immediately.
 Rate limits and exhausted quota both arrive as HTTP 429, so the provider's
 message body is inspected before the status code is trusted. Retrying a billing
 failure can never succeed, and treating it as a rate limit only delays a clear
-answer by the full backoff period. When a provider sends `Retry-After`, that
-value is used instead of the calculated backoff.
+answer by the full backoff period.
+
+`Retry-After` is a minimum the provider is asking for, so it is honoured in full
+rather than shortened to the local backoff ceiling. Plain seconds, HTTP-dates and
+compound durations such as `1m30s` are all accepted. If the requested wait
+exceeds `PROVIDER_RETRY_AFTER_MAX_SECONDS` (default 30), the call fails
+immediately and reports when it may be retried, rather than stalling every other
+council seat.
 
 Every failure carries a machine-readable `code`, a plain-English `cause`, and a
 `fix` naming the setting to change. Logs contain bounded operational details,
@@ -461,6 +470,9 @@ A structured error has the shape:
   "retry_after_seconds": null
 }
 ```
+
+`retry_after_seconds` is populated when the provider names a wait, including
+when the call was abandoned because that wait was too long.
 
 `code` is stable and safe to branch on. `cause` and `fix` are written for
 display to the user. `message` is the provider's own text, unwrapped from its
