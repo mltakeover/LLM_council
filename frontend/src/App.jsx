@@ -5,13 +5,19 @@ import CouncilFlow from './components/CouncilFlow';
 import { api } from './api';
 import { shortModelName } from './utils/modelDisplay';
 import { createRunId } from './utils/runId';
-import { normalizeRoleAssignments } from './utils/councilMode';
+import {
+  normalizeOrchestrationStrategy,
+  normalizeOutputHygiene,
+  normalizeRoleAssignments,
+} from './utils/councilMode';
 import './App.css';
 
 
 const SELECTED_MODELS_KEY = 'llm-council:selected-models';
 const CHAIRMAN_MODEL_KEY = 'llm-council:chairman-model';
 const COUNCIL_MODE_KEY = 'llm-council:council-mode';
+const ORCHESTRATION_STRATEGY_KEY = 'llm-council:orchestration-strategy';
+const OUTPUT_HYGIENE_KEY = 'llm-council:output-hygiene';
 const REVIEW_PROFILE_KEY = 'llm-council:review-profile';
 const INCLUDE_CONTEXT_KEY = 'llm-council:include-context';
 const ROLE_ASSIGNMENTS_KEY = 'llm-council:role-assignments';
@@ -27,9 +33,60 @@ function readRoleAssignments() {
 }
 
 
-function createProgress(models, chairmanModel, phase = 'ready') {
+function readIncludeContext() {
+  const stored = localStorage.getItem(INCLUDE_CONTEXT_KEY);
+  return stored === null ? true : stored === 'true';
+}
+
+
+function persistIncludeContext(value) {
+  // Persist only literal boolean values. This prevents UI, API, or preset data
+  // from becoming arbitrary browser-storage content.
+  if (value === true) {
+    localStorage.setItem(INCLUDE_CONTEXT_KEY, 'true');
+    return true;
+  }
+  localStorage.setItem(INCLUDE_CONTEXT_KEY, 'false');
+  return false;
+}
+
+
+function persistOrchestrationStrategy(value) {
+  const normalized = normalizeOrchestrationStrategy(value);
+  // Keep literal values at the storage sink so API/UI-derived strings can
+  // never poison browser storage.
+  if (normalized === 'council') {
+    localStorage.setItem(ORCHESTRATION_STRATEGY_KEY, 'council');
+    return 'council';
+  }
+  if (normalized === 'workforce') {
+    localStorage.setItem(ORCHESTRATION_STRATEGY_KEY, 'workforce');
+    return 'workforce';
+  }
+  localStorage.setItem(ORCHESTRATION_STRATEGY_KEY, 'hybrid');
+  return 'hybrid';
+}
+
+
+function persistOutputHygiene(value) {
+  const normalized = normalizeOutputHygiene(value);
+  if (normalized === 'off') {
+    localStorage.setItem(OUTPUT_HYGIENE_KEY, 'off');
+    return 'off';
+  }
+  if (normalized === 'report') {
+    localStorage.setItem(OUTPUT_HYGIENE_KEY, 'report');
+    return 'report';
+  }
+  localStorage.setItem(OUTPUT_HYGIENE_KEY, 'clean_safe');
+  return 'clean_safe';
+}
+
+
+function createProgress(models, chairmanModel, phase = 'ready', orchestrationStrategy = 'hybrid') {
   return {
     phase,
+    orchestrationStrategy,
     models: models.map((id) => ({
       id,
       stage1: 'pending',
@@ -41,6 +98,7 @@ function createProgress(models, chairmanModel, phase = 'ready') {
     })),
     chairman: {
       id: chairmanModel,
+      manager: orchestrationStrategy === 'council' ? 'skipped' : 'pending',
       stage3: 'pending',
       attempts: {},
       elapsed: {},
@@ -67,15 +125,22 @@ function App() {
   const [titleModel, setTitleModel] = useState(null);
   const [reviewProfiles, setReviewProfiles] = useState([]);
   const [councilModes, setCouncilModes] = useState([]);
+  const [orchestrationStrategies, setOrchestrationStrategies] = useState([]);
   const [councilMode, setCouncilMode] = useState(
     localStorage.getItem(COUNCIL_MODE_KEY) || 'auto'
+  );
+  const [orchestrationStrategy, setOrchestrationStrategy] = useState(
+    normalizeOrchestrationStrategy(
+      localStorage.getItem(ORCHESTRATION_STRATEGY_KEY),
+    )
+  );
+  const [outputHygiene, setOutputHygiene] = useState(
+    normalizeOutputHygiene(localStorage.getItem(OUTPUT_HYGIENE_KEY))
   );
   const [reviewProfile, setReviewProfile] = useState(
     localStorage.getItem(REVIEW_PROFILE_KEY) || 'general'
   );
-  const [includeContext, setIncludeContext] = useState(
-    localStorage.getItem(INCLUDE_CONTEXT_KEY) !== 'false'
-  );
+  const [includeContext, setIncludeContext] = useState(readIncludeContext);
   const [roleAssignments, setRoleAssignments] = useState(readRoleAssignments);
   const [cloudPrivacyConfirmed, setCloudPrivacyConfirmed] = useState(false);
   const [councilProgress, setCouncilProgress] = useState(
@@ -90,6 +155,7 @@ function App() {
     loadConversations();
     loadModels();
     loadCouncilModes();
+    loadOrchestrationStrategies();
     loadReviewProfiles();
     // Bootstrap once; refresh actions call the same loaders explicitly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -150,6 +216,32 @@ function App() {
     }
   };
 
+  const loadOrchestrationStrategies = async () => {
+    try {
+      const payload = await api.getOrchestrationStrategies();
+      const strategies = (Array.isArray(payload.strategies)
+        ? payload.strategies
+        : []).filter((strategy) => (
+        normalizeOrchestrationStrategy(strategy.id, '') === strategy.id
+      ));
+      setOrchestrationStrategies(strategies);
+      if (!strategies.some((strategy) => strategy.id === orchestrationStrategy)) {
+        const fallback = persistOrchestrationStrategy(payload.default);
+        setOrchestrationStrategy(fallback);
+      }
+    } catch (error) {
+      console.error('Failed to load orchestration strategies:', error);
+      setOrchestrationStrategies([
+        {
+          id: 'council',
+          name: 'Council',
+          description: 'Independent answers, peer review, and Chairman synthesis.',
+        },
+      ]);
+      setOrchestrationStrategy('council');
+    }
+  };
+
   const loadModels = async () => {
     setModelsLoading(true);
     setModelError(null);
@@ -201,7 +293,12 @@ function App() {
       setMaxCouncilModels(catalogMaxModels);
       setSelectedModels(finalModels);
       setChairmanModel(nextChairman);
-      setCouncilProgress(createProgress(finalModels, nextChairman));
+      setCouncilProgress(createProgress(
+        finalModels,
+        nextChairman,
+        'ready',
+        orchestrationStrategy,
+      ));
       setRoleAssignments((previous) => {
         const next = Object.fromEntries(
           Object.entries(previous).filter(([model]) => finalModels.includes(model))
@@ -254,7 +351,7 @@ function App() {
       setCloudPrivacyConfirmed(false);
       setLastFailedRequest(null);
       setCouncilProgress(
-        createProgress(selectedModels, chairmanModel)
+        createProgress(selectedModels, chairmanModel, 'ready', orchestrationStrategy)
       );
     } catch (error) {
       console.error('Failed to create conversation:', error);
@@ -321,7 +418,7 @@ function App() {
     setSelectedModels(applicable);
     setCloudPrivacyConfirmed(false);
     localStorage.setItem(SELECTED_MODELS_KEY, JSON.stringify(applicable));
-    setCouncilProgress(createProgress(applicable, nextChairman));
+    setCouncilProgress(createProgress(applicable, nextChairman, 'ready', orchestrationStrategy));
   };
 
   const handleToggleModel = (modelId) => {
@@ -360,7 +457,7 @@ function App() {
         return filtered;
       });
       setModelError(null);
-      setCouncilProgress(createProgress(next, nextChairman));
+      setCouncilProgress(createProgress(next, nextChairman, 'ready', orchestrationStrategy));
       return next;
     });
   };
@@ -370,7 +467,7 @@ function App() {
 
     setChairmanModel(modelId);
     localStorage.setItem(CHAIRMAN_MODEL_KEY, modelId);
-    setCouncilProgress(createProgress(selectedModels, modelId));
+    setCouncilProgress(createProgress(selectedModels, modelId, 'ready', orchestrationStrategy));
   };
 
   const handleReviewProfileChange = (profileId) => {
@@ -385,6 +482,23 @@ function App() {
     setRoleAssignments({});
     localStorage.setItem(COUNCIL_MODE_KEY, modeId);
     localStorage.setItem(ROLE_ASSIGNMENTS_KEY, '{}');
+  };
+
+  const handleOrchestrationStrategyChange = (strategyId) => {
+    if (isLoading) return;
+    const safeStrategy = persistOrchestrationStrategy(strategyId);
+    setOrchestrationStrategy(safeStrategy);
+    setCouncilProgress(createProgress(
+      selectedModels,
+      chairmanModel,
+      'ready',
+      safeStrategy,
+    ));
+  };
+
+  const handleOutputHygieneChange = (mode) => {
+    if (isLoading) return;
+    setOutputHygiene(persistOutputHygiene(mode));
   };
 
   const handleRoleAssignmentChange = (modelId, role) => {
@@ -410,8 +524,7 @@ function App() {
 
   const handleIncludeContextChange = (enabled) => {
     if (isLoading) return;
-    setIncludeContext(enabled);
-    localStorage.setItem(INCLUDE_CONTEXT_KEY, String(enabled));
+    setIncludeContext(persistIncludeContext(enabled));
   };
 
   const handleApplyPreset = (preset) => {
@@ -437,6 +550,13 @@ function App() {
     const nextMode = councilModes.some((mode) => mode.id === preset.councilMode)
       ? preset.councilMode
       : 'auto';
+    const presetStrategy = normalizeOrchestrationStrategy(
+      preset.orchestrationStrategy,
+    );
+    const nextStrategy = orchestrationStrategies.some(
+      (strategy) => strategy.id === presetStrategy
+    ) ? presetStrategy : 'hybrid';
+    const nextOutputHygiene = normalizeOutputHygiene(preset.outputHygiene);
     const nextContext = preset.includeContext !== false;
     const nextRoles = Object.fromEntries(
       Object.entries(preset.roleAssignments || {}).filter(([model]) => (
@@ -447,19 +567,22 @@ function App() {
     setSelectedModels(nextModels);
     setChairmanModel(nextChairman);
     setCouncilMode(nextMode);
+    setOrchestrationStrategy(nextStrategy);
+    setOutputHygiene(nextOutputHygiene);
     setReviewProfile(nextProfile);
     setRoleAssignments(nextRoles);
-    setIncludeContext(nextContext);
+    setIncludeContext(persistIncludeContext(nextContext));
     setCloudPrivacyConfirmed(false);
     setModelError(null);
-    setCouncilProgress(createProgress(nextModels, nextChairman));
+    setCouncilProgress(createProgress(nextModels, nextChairman, 'ready', nextStrategy));
 
     localStorage.setItem(SELECTED_MODELS_KEY, JSON.stringify(nextModels));
     localStorage.setItem(CHAIRMAN_MODEL_KEY, nextChairman);
     localStorage.setItem(COUNCIL_MODE_KEY, nextMode);
+    persistOrchestrationStrategy(nextStrategy);
+    persistOutputHygiene(nextOutputHygiene);
     localStorage.setItem(REVIEW_PROFILE_KEY, nextProfile);
     localStorage.setItem(ROLE_ASSIGNMENTS_KEY, JSON.stringify(nextRoles));
-    localStorage.setItem(INCLUDE_CONTEXT_KEY, String(nextContext));
   };
 
   const updateLastAssistant = (updater) => {
@@ -495,17 +618,17 @@ function App() {
         usage: data.usage,
         error: data.error,
       };
-      if (stage === 'stage3') {
+      if (stage === 'stage3' || stage === 'manager') {
         return {
           ...previous,
           chairman: {
             ...previous.chairman,
             id: data.model,
-            stage3: status,
-            attempts: { ...previous.chairman.attempts, stage3: details.attempts },
-            elapsed: { ...previous.chairman.elapsed, stage3: details.elapsed },
-            usage: { ...previous.chairman.usage, stage3: details.usage },
-            errors: { ...previous.chairman.errors, stage3: details.error },
+            [stage]: status,
+            attempts: { ...previous.chairman.attempts, [stage]: details.attempts },
+            elapsed: { ...previous.chairman.elapsed, [stage]: details.elapsed },
+            usage: { ...previous.chairman.usage, [stage]: details.usage },
+            errors: { ...previous.chairman.errors, [stage]: details.error },
           },
         };
       }
@@ -544,6 +667,10 @@ function App() {
       existingSettings?.chairmanModel || chairmanModel || activeModels[0]
     );
     const activeCouncilMode = existingSettings?.councilMode || councilMode;
+    const activeOrchestrationStrategy = (
+      existingSettings?.orchestrationStrategy || orchestrationStrategy
+    );
+    const activeOutputHygiene = existingSettings?.outputHygiene || outputHygiene;
     const activeReviewProfile = existingSettings?.reviewProfile || reviewProfile;
     const activeIncludeContext = existingSettings?.includeContext ?? includeContext;
     const activeCloudProcessingConfirmed = (
@@ -556,6 +683,8 @@ function App() {
       models: activeModels,
       chairmanModel: activeChairman,
       councilMode: activeCouncilMode,
+      orchestrationStrategy: activeOrchestrationStrategy,
+      outputHygiene: activeOutputHygiene,
       reviewProfile: activeReviewProfile,
       includeContext: activeIncludeContext,
       roleAssignments: activeRoleAssignments,
@@ -570,7 +699,12 @@ function App() {
     setModelError(null);
     setLastFailedRequest(null);
     setCouncilProgress(
-      createProgress(activeModels, activeChairman, 'connecting')
+      createProgress(
+        activeModels,
+        activeChairman,
+        'connecting',
+        activeOrchestrationStrategy,
+      )
     );
 
     const documentIds = selectedDocuments.map((document) => document.id);
@@ -580,6 +714,8 @@ function App() {
       content,
       documents: selectedDocuments,
       council_mode: activeCouncilMode,
+      orchestration_strategy: activeOrchestrationStrategy,
+      output_hygiene: activeOutputHygiene,
     };
     const assistantMessage = {
       role: 'assistant',
@@ -631,6 +767,8 @@ function App() {
           models: activeModels,
           chairmanModel: activeChairman,
           councilMode: activeCouncilMode,
+          orchestrationStrategy: activeOrchestrationStrategy,
+          outputHygiene: activeOutputHygiene,
           reviewProfile: activeReviewProfile,
           roleAssignments: activeRoleAssignments,
           includeContext: activeIncludeContext,
@@ -646,10 +784,47 @@ function App() {
                 event.data?.chairman_model || activeChairman
               );
               setCouncilProgress(
-                createProgress(eventModels, eventChairman, 'connecting')
+                createProgress(
+                  eventModels,
+                  eventChairman,
+                  'connecting',
+                  event.data?.orchestration_strategy || activeOrchestrationStrategy,
+                )
               );
               break;
             }
+
+            case 'manager_start':
+              setCouncilProgress((previous) => ({
+                ...previous,
+                phase: 'manager',
+                chairman: {
+                  ...previous.chairman,
+                  id: event.data?.manager_model || previous.chairman.id,
+                  manager: 'active',
+                },
+              }));
+              break;
+
+            case 'manager_complete':
+              updateLastAssistant((message) => ({
+                ...message,
+                metadata: {
+                  ...(message.metadata || {}),
+                  orchestration_strategy: activeOrchestrationStrategy,
+                  workforce_plan: event.data,
+                },
+              }));
+              setCouncilProgress((previous) => ({
+                ...previous,
+                chairman: {
+                  ...previous.chairman,
+                  manager: event.data?.source === 'deterministic_fallback'
+                    ? 'failed'
+                    : 'complete',
+                },
+              }));
+              break;
 
             case 'stage1_start':
               updateLastAssistant((message) => ({
@@ -706,6 +881,7 @@ function App() {
                 (event.data || []).map((result) => result.model)
               );
               const stageSkipped = event.metadata?.stage2_skipped;
+              const qaReviewers = new Set(event.metadata?.qa_reviewers || []);
               updateLastAssistant((message) => ({
                 ...message,
                 stage2: event.data,
@@ -718,7 +894,11 @@ function App() {
                   ...model,
                   stage2: stageSkipped
                     ? 'skipped'
-                    : (successful.has(model.id) ? 'complete' : 'failed'),
+                    : (
+                        qaReviewers.size > 0 && !qaReviewers.has(model.id)
+                          ? 'skipped'
+                          : (successful.has(model.id) ? 'complete' : 'failed')
+                      ),
                 })),
               }));
               break;
@@ -812,6 +992,9 @@ function App() {
                 })),
                 chairman: {
                   ...previous.chairman,
+                  manager: ['active', 'retrying'].includes(previous.chairman.manager)
+                    ? 'failed'
+                    : previous.chairman.manager,
                   stage3: ['active', 'retrying'].includes(previous.chairman.stage3)
                     ? 'failed'
                     : previous.chairman.stage3,
@@ -859,6 +1042,9 @@ function App() {
           })),
           chairman: {
             ...previous.chairman,
+            manager: ['active', 'retrying'].includes(previous.chairman.manager)
+              ? 'failed'
+              : previous.chairman.manager,
             stage3: ['active', 'retrying'].includes(previous.chairman.stage3)
               ? 'failed'
               : previous.chairman.stage3,
@@ -961,6 +1147,9 @@ function App() {
         chairmanModel={chairmanModel}
         councilModes={councilModes}
         councilMode={councilMode}
+        orchestrationStrategies={orchestrationStrategies}
+        orchestrationStrategy={orchestrationStrategy}
+        outputHygiene={outputHygiene}
         reviewProfiles={reviewProfiles}
         reviewProfile={reviewProfile}
         roleAssignments={roleAssignments}
@@ -968,6 +1157,8 @@ function App() {
         onToggleModel={handleToggleModel}
         onChairmanChange={handleChairmanChange}
         onCouncilModeChange={handleCouncilModeChange}
+        onOrchestrationStrategyChange={handleOrchestrationStrategyChange}
+        onOutputHygieneChange={handleOutputHygieneChange}
         onReviewProfileChange={handleReviewProfileChange}
         onRoleAssignmentChange={handleRoleAssignmentChange}
         onResetRoles={handleResetRoles}
@@ -994,6 +1185,8 @@ function App() {
           selectedModels={selectedModels}
           chairmanModel={chairmanModel}
           councilMode={councilMode}
+          orchestrationStrategy={orchestrationStrategy}
+          outputHygiene={outputHygiene}
           reviewProfile={reviewProfile}
           reviewProfiles={reviewProfiles}
           includeContext={includeContext}

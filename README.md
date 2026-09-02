@@ -1,19 +1,41 @@
 # LLM Council
 
-Current release: **v0.4.0 — Adaptive Council**
+Current release: **v0.5.0 — Managed Workforce**
 
 LLM Council is a local-first, general-purpose multi-model deliberation app. Use
 it to ask questions, review material, debate a proposition, make a decision,
 brainstorm ideas, compare alternatives, build a plan, summarise documents, or
 assess claims. It is not limited to architecture or code.
 
-Council members work independently, anonymously evaluate one another, and a
-selected Chairman reconciles their work into a structured, task-appropriate
-answer. Any locally installed Ollama model can be discovered at runtime, and
+Council members can work as an independent panel or as managed specialist
+workers. In Workforce and Hybrid strategies, a Manager decomposes the request,
+each selected model receives an accountable deliverable, targeted QA challenges
+the combined work, and a selected Master reconciles the evidence into a
+structured answer with a contribution ledger. Any locally installed Ollama
+model can be discovered at runtime, and
 local models can be mixed with directly configured OpenAI, Anthropic, Google
 Gemini, and xAI APIs. OpenRouter is not used.
 
-## What v0.4.0 adds
+## What v0.5.0 adds
+
+- **Three orchestration strategies:** Council, Workforce, and Hybrid.
+- **Manager planning:** the selected Master decomposes Workforce and Hybrid
+  requests into one bounded assignment per selected model.
+- **Accountable worker contracts:** deliverables, success criteria,
+  dependencies, claims, evidence, confidence, risks, recommendations, and open
+  questions are captured explicitly.
+- **Targeted Hybrid QA:** at most two selected models challenge the specialist
+  outputs for unsupported claims, conflicts, omissions, and integration gaps.
+- **Contribution ledger:** the Master is asked to state which worker
+  contributions were used, partially used, or rejected, with reasons.
+- **Conservative output hygiene:** invisible carrier characters are inspected
+  before evaluation/synthesis and again before display; only a narrow safe set
+  is removed by default.
+- **No detector-evasion rewrite:** the application does not paraphrase,
+  “humanise,” strip file metadata, or claim to prove whether text was written by
+  AI.
+
+## What v0.4.0 added
 
 - **Adaptive council modes:** Auto, Ask, Review, Debate, Decide, Brainstorm,
   Compare, Plan, Summarise, and Fact-check.
@@ -58,32 +80,46 @@ Review mode retains optional General, HLD, LLD, Code, and Security profiles.
 Those are specialist tools inside the broader council, not the product's main
 boundary.
 
+## Orchestration strategies
+
+Task mode and orchestration strategy are separate. A mode such as Review,
+Decide, or Plan describes the outcome; the strategy describes how models
+collaborate.
+
+| Strategy | Collaboration pattern | Approximate calls for N models |
+|---|---|---|
+| Council | N independent complete answers, N anonymous peer evaluations, one Chairman synthesis | `2N + 1` |
+| Workforce | One Manager plan, N specialist deliverables, one Master synthesis | `N + 2` |
+| Hybrid | One Manager plan, N specialist deliverables, up to two targeted QA reviews, one Master synthesis | `N + 4` |
+
+The first turn can add one title call. Chunked documents and provider retries
+add calls. Hybrid is the recommended default in the UI; API clients that omit
+`orchestration_strategy` retain the earlier `council` behaviour.
+
 ## How a council run works
 
 ```mermaid
 flowchart TD
-    Q[Request and optional files] --> M[Resolve council mode]
-    M --> R[Assign model perspectives]
-    R --> S1[Independent responses]
-    S1 --> S2[Anonymous peer evaluation]
-    S2 --> S3[Chairman synthesis]
-    S3 --> O[Adaptive report]
-
-    S1 -. per-model progress .-> UI[Live council flow]
-    S2 -. per-model progress .-> UI
-    S3 -. Chairman progress .-> UI
+    Q[Request and optional files] --> R[Resolve mode and strategy]
+    R --> M[Manager plan when required]
+    M --> W[Independent specialist work]
+    W --> QA[Full peer review or targeted QA]
+    QA --> S[Chairman or Master synthesis]
+    S --> H[Schema validation and output hygiene]
+    H --> O[Adaptive report and audit metadata]
 ```
-
-For `N` council models and no chunked document, a normal turn uses about
-`2N + 1` calls: `N` independent responses, `N` peer evaluations, and one
-Chairman synthesis. A first turn can make one additional title call. Chunked
-documents and retries add calls; the UI presents an estimate before sending.
 
 ## Main features
 
 - Runtime discovery of locally downloaded Ollama models
 - Direct OpenAI, Anthropic, Google Gemini, and xAI clients
-- Configurable council membership, Chairman, mode, context, and per-model roles
+- Configurable council membership, Manager/Master, task mode, orchestration
+  strategy, context, and per-model role constraints
+- Managed workforce plans with bounded worker assignments and targeted Hybrid QA
+- Structured worker claims, evidence, confidence, risks, recommendations, and
+  open questions
+- Master contribution ledger for selection and rejection traceability
+- Conservative output-hygiene reports stored with worker, QA, and final output
 - Diagnosed provider errors with cause and fix guidance, selective retries,
   timeouts, and privacy-safe logs
 - Stream guard when every Stage 1 model fails
@@ -129,6 +165,8 @@ LLM_council/
 │   ├── errors.py            # Provider error diagnosis, causes, and fixes
 │   ├── evaluations.py       # General-purpose regression catalogue
 │   ├── main.py              # FastAPI routes and SSE stream
+│   ├── orchestration.py     # Council, Workforce, and Hybrid strategies
+│   ├── output_hygiene.py    # Conservative Unicode inspection and cleanup
 │   ├── providers.py         # Direct provider clients, retries, and events
 │   ├── review_profiles.py   # Optional specialist review profiles
 │   └── storage.py           # SQLite persistence and JSON migration
@@ -316,6 +354,28 @@ Every failure carries a machine-readable `code`, a plain-English `cause`, and a
 `fix` naming the setting to change. Logs contain bounded operational details,
 not prompts, API keys, document contents, or full provider responses.
 
+## Output hygiene boundary
+
+Each run can select one of three output-hygiene modes:
+
+| Mode | Behaviour |
+|---|---|
+| `clean_safe` | Inspect output and remove only the conservative safe set of non-rendering carrier characters |
+| `report` | Record the same findings but leave output unchanged |
+| `off` | Skip inspection and cleanup |
+
+The safe set currently covers soft hyphens, zero-width spaces, word joiners,
+invisible mathematical separators, and embedded BOM characters. Script
+joiners, bidirectional controls, Unicode tag characters, variation selectors,
+unusual spaces, and emoji-related characters are not changed automatically.
+They are either reported or left untouched because they can be legitimate.
+
+This feature is output hygiene, not an AI detector. It does not infer
+authorship, remove statistical token-sampling watermarks, rewrite prose,
+“humanise” text, or strip C2PA/EXIF/document metadata. Original provider output
+is retained in the stored stage result only when conservative cleaning changed
+it, so the transformation remains auditable.
+
 ## Run the app
 
 Use two terminals from the repository root.
@@ -342,24 +402,28 @@ documentation is at `http://127.0.0.1:8001/docs`.
 ## Use the UI
 
 1. Create a conversation.
-2. Select one to eight council models and choose the Chairman.
-3. Select **Auto** or an explicit council mode.
-4. In Review mode, optionally choose a specialist review profile.
-5. Optionally give individual models custom perspectives. Blank roles use the
-   mode defaults.
-6. Choose whether recent conversation context should be included.
-7. Optionally upload and select up to five documents.
-8. If cloud or remote processing is involved, read and accept the privacy
+2. Select one to eight models and choose the Chairman/Master.
+3. Select Council, Workforce, or Hybrid orchestration. Hybrid is recommended.
+4. Select **Auto** or an explicit task mode.
+5. In Review mode, optionally choose a specialist review profile.
+6. Optionally give models role constraints. In Workforce and Hybrid these are
+   preserved by the Manager when it creates assignments.
+7. Select output-hygiene behaviour and choose whether recent conversation
+   context should be included.
+8. Optionally upload and select up to five documents.
+9. If cloud or remote processing is involved, read and accept the privacy
    confirmation.
-9. Check the approximate usage estimate, then send.
-10. Follow each model's live status and click a node for timing, attempts,
+10. Check the approximate usage estimate, then send.
+11. Follow the Manager, workers, QA, and Master in the live flow; click a node
+    for timing, attempts,
     errors, and reported token usage.
-11. Compare independent responses and inspect the adaptive Chairman report.
-12. Save useful setups as presets or export the conversation.
+12. Compare specialist outputs and inspect the adaptive report, contribution
+    ledger, and hygiene findings.
+13. Save useful setups as presets or export the conversation.
 
 Selected files remain in the conversation until deleted. Long files are split
 into bounded, overlapping chunks. Each model analyses the chunks and
-consolidates its own notes before peer evaluation. Files beyond
+consolidates its own notes before peer evaluation or targeted QA. Files beyond
 `MAX_DOCUMENT_CHUNKS` are marked as truncated; only stored chunks are processed.
 
 ## Example requests
@@ -415,6 +479,8 @@ proposals, plans, and other material.
 - OpenAI calls set `store=False`; other SDK calls use their direct API defaults.
 - Original uploaded bytes are not retained. Extracted text, chunks, messages,
   outputs, and run state are stored in local SQLite at `DATABASE_PATH`.
+- Workforce plans, worker contracts, targeted QA, contribution ledgers, and
+  output-hygiene findings are stored in the assistant turn metadata.
 - A UUID `run_id` makes failed and cancelled requests safely retryable without
   duplicating messages.
 - Deleting a conversation cascades to its messages and extracted documents.
@@ -433,6 +499,7 @@ deleted; keep a backup until you verify the migration.
 |---|---|---|
 | `GET` | `/` | Health and release version |
 | `GET` | `/api/council-modes` | Modes, objectives, criteria, and default roles |
+| `GET` | `/api/orchestration-strategies` | Council, Workforce, and Hybrid collaboration patterns |
 | `GET` | `/api/evaluations/catalog` | General-purpose regression catalogue |
 | `GET` | `/api/review-profiles` | Optional specialist review profiles |
 | `GET` | `/api/models` | Configured cloud and discovered Ollama models |
@@ -447,12 +514,14 @@ deleted; keep a backup until you verify the migration.
 | `POST` | `/api/conversations/{id}/message` | Run a non-streamed council turn |
 | `POST` | `/api/conversations/{id}/message/stream` | Run with SSE progress |
 
-The message endpoints accept `council_mode`, `review_profile`,
-`role_assignments`, selected models, Chairman, context choice, document IDs,
-privacy confirmation, and a UUID `run_id`. Reusing a run ID with changed inputs
-returns HTTP 409.
+The message endpoints accept `council_mode`, `orchestration_strategy`,
+`output_hygiene`, `review_profile`, `role_assignments`, selected models,
+Chairman/Master, context choice, document IDs, privacy confirmation, and a UUID
+`run_id`. Reusing a run ID with changed inputs returns HTTP 409.
 
-Provider progress events are `model_started`, `model_retrying`,
+Workflow events include `manager_start`, `manager_complete`, `stage1_start`,
+`stage1_complete`, `stage2_start`, `stage2_complete`, `stage3_start`, and
+`stage3_complete`. Provider progress events are `model_started`, `model_retrying`,
 `model_completed`, and `model_failed`. Terminal stream events are `complete` or
 a structured `error`.
 
@@ -607,6 +676,12 @@ npm ci
 - Model output can be wrong, biased, outdated, or fabricated. Important outputs
   require appropriate human judgement and source verification.
 - Agreement between models is not proof. Models can share the same blind spots.
+- Manager plans and contribution ledgers are model-generated control records;
+  they improve traceability but do not independently prove correctness.
+- Specialist workers currently execute in parallel. Plan dependencies inform
+  the workers and Master but are not sequential worker-to-worker tool hand-offs.
+- Output hygiene detects a bounded set of Unicode characters. A clean report is
+  not proof that text contains no statistical watermark or AI provenance.
 - Fact-check mode has no live browsing or authoritative-source retrieval in
   this release.
 - Character-based token estimates omit generated output and provider-specific
@@ -622,3 +697,10 @@ The three-stage council pattern is inspired by Andrej Karpathy's LLM Council.
 This implementation extends it for general-purpose adaptive deliberation,
 direct providers, dynamic Ollama discovery, streaming progress, structured
 outputs, documents, privacy controls, and local persistence.
+
+The conservative distinction between invisible Unicode hygiene, file metadata,
+and statistical watermark rewriting was informed by Guillaume Meyer's
+[`watermarks-remover`](https://github.com/guillaumemeyer/watermarks-remover)
+project. This repository uses an independently implemented, narrower Unicode
+scanner and does not copy its service, detectors, rewriting layer, or metadata
+cleaners.

@@ -20,7 +20,7 @@ function formatDuration(seconds) {
   return seconds == null ? null : `${seconds.toFixed(1)}s`;
 }
 
-export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
+export default function Stage2({ rankings, labelToModel, aggregateRankings, orchestrationStrategy }) {
   const [activeTab, setActiveTab] = useState(0);
 
   if (!rankings || rankings.length === 0) {
@@ -40,16 +40,22 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
   };
 
   const active = rankings[activeTab];
+  const targetedQa = orchestrationStrategy === 'hybrid' || active?.qa_review;
   const duration = formatDuration(active.elapsed_seconds);
 
   return (
     <div className="stage stage2">
-      <h3 className="stage-title">Stage 2: Peer Rankings</h3>
+      <h3 className="stage-title">
+        {targetedQa ? 'Stage 2: Targeted Quality Assurance' : 'Stage 2: Peer Rankings'}
+      </h3>
 
-      <h4>Raw Evaluations</h4>
+      <h4>{targetedQa ? 'QA Evaluations' : 'Raw Evaluations'}</h4>
       <p className="stage-description">
-        Each model evaluated all responses (anonymized as Response A, B, C, etc.) and provided rankings.
-        Below, model names are shown in <strong>bold</strong> for readability, but the original evaluation used anonymous labels.
+        {targetedQa
+          ? 'Selected QA workers challenged the anonymised specialist deliverables for unsupported claims, conflicts, omissions, and integration risks.'
+          : 'Each model evaluated all responses and provided rankings.'}
+        {' '}Below, model names are shown in <strong>bold</strong> for readability,
+        but the original evaluation used anonymous labels.
       </p>
 
       <div

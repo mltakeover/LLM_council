@@ -7,7 +7,7 @@ function formatDuration(seconds) {
   return seconds == null ? null : `${seconds.toFixed(1)}s`;
 }
 
-export default function Stage1({ responses }) {
+export default function Stage1({ responses, metadata }) {
   const [activeTab, setActiveTab] = useState(0);
   const [view, setView] = useState('tabs');
 
@@ -28,6 +28,7 @@ export default function Stage1({ responses }) {
   };
 
   const active = responses[Math.min(activeTab, responses.length - 1)];
+  const workforcePlan = metadata?.workforce_plan;
   const duration = formatDuration(active.elapsed_seconds);
 
   const responseMeta = (response) => {
@@ -50,6 +51,25 @@ export default function Stage1({ responses }) {
           </div>
         )}
       </div>
+
+      {workforcePlan?.objective && (
+        <details className="workforce-plan" open>
+          <summary>
+            Manager work plan
+            {workforcePlan.source === 'deterministic_fallback' && (
+              <span> · deterministic fallback</span>
+            )}
+          </summary>
+          <p>{workforcePlan.objective}</p>
+          {workforcePlan.integration_notes?.length > 0 && (
+            <ul>
+              {workforcePlan.integration_notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          )}
+        </details>
+      )}
 
       {view === 'tabs' ? (
         <>
@@ -92,7 +112,22 @@ export default function Stage1({ responses }) {
               {active.usage?.total_tokens && <span className="model-timing"> · {active.usage.total_tokens.toLocaleString()} tokens</span>}
             </div>
             {(active.role || active.reviewer_role) && (
-              <div className="model-role">Perspective: {active.role || active.reviewer_role}</div>
+              <div className="model-role">
+                {active.assignment ? 'Worker role' : 'Perspective'}: {active.role || active.reviewer_role}
+              </div>
+            )}
+            {active.assignment && (
+              <div className="worker-assignment">
+                <strong>Assigned deliverable</strong>
+                <span>{active.assignment.deliverable}</span>
+                {active.assignment.success_criteria?.length > 0 && (
+                  <ul>
+                    {active.assignment.success_criteria.map((criterion) => (
+                      <li key={criterion}>{criterion}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
             <div className="response-text markdown-content">
               <Markdown>{active.response}</Markdown>

@@ -1,9 +1,11 @@
 # LLM Council frontend
 
 React and Vite interface for the general-purpose LLM Council. It provides
-adaptive mode selection, per-model perspectives, dynamic model discovery,
-saved presets, live stage progress, documents, task-specific Chairman panels,
-consensus views, provider checks, and Markdown/DOCX/PDF exports.
+adaptive mode selection, Council/Workforce/Hybrid orchestration, per-model
+perspectives and worker assignments, dynamic model discovery, saved presets,
+live Manager/worker/QA/Master progress, contribution ledgers, output-hygiene
+status, documents, adaptive reports, provider checks, and Markdown/DOCX/PDF
+exports.
 
 ## Requirements
 
@@ -48,8 +50,9 @@ these checks for pushes and pull requests targeting `master`.
   task and persists a retryable cancelled run.
 - Locality comes from backend catalogue metadata. Remote Ollama is not local.
 - Auto mode is resolved by the backend without a classification provider call.
-- Presets include models, Chairman, mode, custom roles, review profile, and
-  conversation-context preference. Legacy presets default safely to Auto.
+- Presets include models, Chairman/Master, orchestration strategy, task mode,
+  output hygiene, custom roles, review profile, and conversation-context
+  preference. Legacy presets preserve the earlier Council behaviour.
 - Review profiles are shown only for Review and Auto. Other modes use their own
   perspectives and peer-evaluation criteria.
 - The adaptive report renders only panels populated for the resolved mode, such

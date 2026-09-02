@@ -31,6 +31,7 @@ from .council import (
     calculate_aggregate_rankings,
     calculate_consensus_metrics,
     create_fallback_conversation_title,
+    create_workforce_plan,
     generate_conversation_title,
     get_model_recommendations,
     run_full_council,
@@ -46,6 +47,12 @@ from .council_modes import (
 )
 from .documents import DocumentExtractionError, extract_document
 from .evaluations import list_evaluation_cases
+from .orchestration import (
+    get_orchestration_strategy,
+    is_valid_orchestration_strategy,
+    list_orchestration_strategies,
+)
+from .output_hygiene import OUTPUT_HYGIENE_MODES
 from .providers import list_ollama_models, query_model
 from .review_profiles import (
     get_review_profile,
@@ -90,7 +97,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="LLM Council API", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="LLM Council API", version="0.5.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -120,12 +127,28 @@ def _normalized_council_mode(value: str) -> str:
     return normalized
 
 
+def _normalized_orchestration_strategy(value: str) -> str:
+    normalized = value.strip().lower()
+    if not is_valid_orchestration_strategy(normalized):
+        raise ValueError("unknown orchestration strategy")
+    return normalized
+
+
+def _normalized_output_hygiene(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in OUTPUT_HYGIENE_MODES:
+        raise ValueError("unknown output hygiene mode")
+    return normalized
+
+
 class SendMessageRequest(BaseModel):
     run_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     content: str = Field(min_length=1, max_length=MAX_PROMPT_CHARACTERS)
     models: Optional[List[str]] = None
     chairman_model: Optional[str] = None
     council_mode: str = "auto"
+    orchestration_strategy: str = "council"
+    output_hygiene: str = "clean_safe"
     review_profile: str = "general"
     role_assignments: Dict[str, str] = Field(default_factory=dict)
     include_context: bool = True
@@ -160,6 +183,16 @@ class SendMessageRequest(BaseModel):
     @classmethod
     def mode_must_exist(cls, value: str) -> str:
         return _normalized_council_mode(value)
+
+    @field_validator("orchestration_strategy")
+    @classmethod
+    def strategy_must_exist(cls, value: str) -> str:
+        return _normalized_orchestration_strategy(value)
+
+    @field_validator("output_hygiene")
+    @classmethod
+    def output_hygiene_must_exist(cls, value: str) -> str:
+        return _normalized_output_hygiene(value)
 
     @field_validator("role_assignments")
     @classmethod
@@ -219,6 +252,8 @@ class UsageEstimateRequest(BaseModel):
     )
     include_context: bool = True
     council_mode: str = "auto"
+    orchestration_strategy: str = "council"
+    output_hygiene: str = "clean_safe"
     review_profile: str = "general"
 
     @field_validator("council_mode")
@@ -230,6 +265,16 @@ class UsageEstimateRequest(BaseModel):
     @classmethod
     def profile_must_exist(cls, value: str) -> str:
         return _normalized_review_profile(value)
+
+    @field_validator("orchestration_strategy")
+    @classmethod
+    def strategy_must_exist(cls, value: str) -> str:
+        return _normalized_orchestration_strategy(value)
+
+    @field_validator("output_hygiene")
+    @classmethod
+    def output_hygiene_must_exist(cls, value: str) -> str:
+        return _normalized_output_hygiene(value)
 
 
 class ConversationMetadata(BaseModel):
@@ -372,6 +417,8 @@ def _run_request_payload(
         "models": models,
         "chairman_model": chairman_model,
         "council_mode": request.council_mode,
+        "orchestration_strategy": request.orchestration_strategy,
+        "output_hygiene": request.output_hygiene,
         "review_profile": request.review_profile,
         "role_assignments": dict(sorted(request.role_assignments.items())),
         "include_context": request.include_context,
@@ -504,12 +551,17 @@ async def _run_with_events(
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "LLM Council API", "version": "0.4.0"}
+    return {"status": "ok", "service": "LLM Council API", "version": "0.5.0"}
 
 
 @app.get("/api/council-modes")
 async def get_council_modes():
     return {"modes": list_council_modes(), "default": "auto"}
+
+
+@app.get("/api/orchestration-strategies")
+async def get_orchestration_strategies():
+    return {"strategies": list_orchestration_strategies(), "default": "hybrid"}
 
 
 @app.get("/api/evaluations/catalog")
@@ -710,10 +762,17 @@ async def usage_estimate(
     history = _history_from_conversation(conversation) if request.include_context else []
     models = _unique_models(request.models or list(COUNCIL_MODELS))
     model_count = min(len(models), MAX_COUNCIL_MODELS)
+    strategy = get_orchestration_strategy(request.orchestration_strategy)
     chunk_count = sum(len(document.get("chunks") or []) for document in documents)
     chunked = chunk_count > 1
     stage1_calls = model_count * ((chunk_count + 1) if chunked else 1)
-    stage2_calls = model_count if model_count > 1 else 0
+    manager_calls = 1 if strategy.manager_planning and model_count else 0
+    if strategy.peer_review == "all":
+        stage2_calls = model_count if model_count > 1 else 0
+    elif strategy.peer_review == "targeted":
+        stage2_calls = min(2, model_count) if model_count > 1 else 0
+    else:
+        stage2_calls = 0
     stage3_calls = 1 if model_count else 0
     title_calls = 1 if conversation.get("title") == "New Conversation" else 0
     reviewed_document_characters = sum(
@@ -736,17 +795,22 @@ async def usage_estimate(
     return {
         "requested_council_mode": request.council_mode,
         "council_mode": resolved_mode.id,
+        "orchestration_strategy": strategy.id,
+        "output_hygiene": request.output_hygiene,
         "model_count": model_count,
         "document_count": len(documents),
         "document_chunk_count": chunk_count,
         "chunked_review": chunked,
         "chunked_document_processing": chunked,
         "estimated_calls": {
+            "manager": manager_calls,
             "stage1": stage1_calls,
             "stage2": stage2_calls,
             "stage3": stage3_calls,
             "title": title_calls,
-            "total": stage1_calls + stage2_calls + stage3_calls + title_calls,
+            "total": (
+                manager_calls + stage1_calls + stage2_calls + stage3_calls + title_calls
+            ),
         },
         "source_characters": source_characters,
         "reviewed_document_characters": reviewed_document_characters,
@@ -801,6 +865,8 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
             documents,
             council_mode=request.council_mode,
             role_assignments=request.role_assignments,
+            orchestration_strategy=request.orchestration_strategy,
+            output_hygiene=request.output_hygiene,
         )
         await storage.add_assistant_message(
             conversation_id,
@@ -888,6 +954,7 @@ async def send_message_stream(
         get_review_profile(request.review_profile),
         request.role_assignments,
     )
+    strategy = get_orchestration_strategy(request.orchestration_strategy)
 
     async def event_generator():
         title_task: Optional[asyncio.Task] = None
@@ -895,6 +962,8 @@ async def send_message_stream(
         stage1_results: List[Dict[str, Any]] = []
         stage2_results: List[Dict[str, Any]] = []
         stage3_result: Optional[Dict[str, Any]] = None
+        workforce_plan: Dict[str, Any] = {}
+        reviewer_models: List[str] = []
         turn_metadata: Dict[str, Any] = {
             "models": models,
             "chairman_model": chairman_model,
@@ -902,6 +971,10 @@ async def send_message_stream(
             "council_mode": resolved_mode.id,
             "review_profile": request.review_profile,
             "role_assignments": assigned_roles,
+            "orchestration_strategy": strategy.id,
+            "workforce_plan": workforce_plan,
+            "qa_reviewers": reviewer_models,
+            "output_hygiene_mode": request.output_hygiene,
         }
         run_terminal = False
         try:
@@ -914,6 +987,8 @@ async def send_message_stream(
                 "council_mode": resolved_mode.id,
                 "review_profile": request.review_profile,
                 "role_assignments": assigned_roles,
+                "orchestration_strategy": strategy.id,
+                "output_hygiene": request.output_hygiene,
                 "document_count": len(documents),
             })
             if needs_title:
@@ -932,6 +1007,41 @@ async def send_message_stream(
                     generate_conversation_title(request.content)
                 )
 
+            if strategy.manager_planning:
+                yield _sse("manager_start", {"manager_model": chairman_model})
+                collected_plan = None
+                async for kind, value in _run_with_events(
+                    lambda callback: create_workforce_plan(
+                        request.content,
+                        models,
+                        chairman_model,
+                        history=history,
+                        review_profile=request.review_profile,
+                        council_mode=resolved_mode.id,
+                        role_assignments=request.role_assignments,
+                        orchestration_strategy=strategy.id,
+                        document_names=[document["filename"] for document in documents],
+                        event_callback=callback,
+                        output_hygiene=request.output_hygiene,
+                    )
+                ):
+                    if kind == "event":
+                        yield _sse(value["type"], value.get("data") or {})
+                    else:
+                        collected_plan = value
+                workforce_plan = collected_plan or {}
+                for assignment in workforce_plan.get("assignments", []):
+                    model = assignment.get("model")
+                    if model in assigned_roles and assignment.get("role"):
+                        assigned_roles[model] = assignment["role"]
+                reviewer_models = list(workforce_plan.get("qa_reviewers") or [])
+                turn_metadata.update({
+                    "role_assignments": assigned_roles,
+                    "workforce_plan": workforce_plan,
+                    "qa_reviewers": reviewer_models,
+                })
+                yield _sse("manager_complete", workforce_plan)
+
             yield _sse("stage1_start", {"models": models})
             collected_stage1 = None
             async for kind, value in _run_with_events(
@@ -944,6 +1054,9 @@ async def send_message_stream(
                     event_callback=callback,
                     council_mode=resolved_mode.id,
                     role_assignments=assigned_roles,
+                    orchestration_strategy=strategy.id,
+                    workforce_plan=workforce_plan,
+                    output_hygiene=request.output_hygiene,
                 )
             ):
                 if kind == "event":
@@ -971,24 +1084,45 @@ async def send_message_stream(
                 yield _sse("error", error=failure, run_id=request.run_id)
                 return
 
-            yield _sse("stage2_start", {"models": models})
-            stage2_result = None
-            async for kind, value in _run_with_events(
-                lambda callback: stage2_collect_rankings(
-                    request.content,
-                    stage1_results,
-                    models=models,
-                    history=history,
-                    review_profile=request.review_profile,
-                    event_callback=callback,
-                    council_mode=resolved_mode.id,
-                )
-            ):
-                if kind == "event":
-                    yield _sse(value["type"], value.get("data") or {})
-                else:
-                    stage2_result = value
-            stage2_results, label_to_model = stage2_result or ([], {})
+            if strategy.peer_review == "all" and len(stage1_results) > 1:
+                reviewer_models = models
+            elif strategy.peer_review == "targeted" and len(stage1_results) > 1:
+                reviewer_models = list(workforce_plan.get("qa_reviewers") or [])
+            else:
+                reviewer_models = []
+
+            if reviewer_models:
+                yield _sse("stage2_start", {
+                    "models": reviewer_models,
+                    "targeted_qa": strategy.peer_review == "targeted",
+                })
+                stage2_result = None
+                async for kind, value in _run_with_events(
+                    lambda callback: stage2_collect_rankings(
+                        request.content,
+                        stage1_results,
+                        models=models,
+                        history=history,
+                        review_profile=request.review_profile,
+                        event_callback=callback,
+                        council_mode=resolved_mode.id,
+                        orchestration_strategy=strategy.id,
+                        reviewer_models=reviewer_models,
+                        workforce_plan=workforce_plan,
+                        output_hygiene=request.output_hygiene,
+                    )
+                ):
+                    if kind == "event":
+                        yield _sse(value["type"], value.get("data") or {})
+                    else:
+                        stage2_result = value
+                stage2_results, label_to_model = stage2_result or ([], {})
+            else:
+                stage2_results = []
+                label_to_model = {
+                    f"Response {chr(65 + index)}": result["model"]
+                    for index, result in enumerate(stage1_results)
+                }
             aggregate_rankings = calculate_aggregate_rankings(
                 stage2_results,
                 label_to_model,
@@ -1007,7 +1141,11 @@ async def send_message_stream(
                 "council_mode": resolved_mode.id,
                 "review_profile": request.review_profile,
                 "role_assignments": assigned_roles,
-                "stage2_skipped": len(stage1_results) <= 1,
+                "orchestration_strategy": strategy.id,
+                "workforce_plan": workforce_plan,
+                "qa_reviewers": reviewer_models,
+                "output_hygiene_mode": request.output_hygiene,
+                "stage2_skipped": not reviewer_models,
             }
             yield _sse(
                 "stage2_complete",
@@ -1027,6 +1165,9 @@ async def send_message_stream(
                     review_profile=request.review_profile,
                     event_callback=callback,
                     council_mode=resolved_mode.id,
+                    orchestration_strategy=strategy.id,
+                    workforce_plan=workforce_plan,
+                    output_hygiene=request.output_hygiene,
                 )
             ):
                 if kind == "event":

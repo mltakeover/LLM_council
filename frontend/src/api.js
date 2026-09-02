@@ -2,7 +2,16 @@
  * API client for the LLM Council backend.
  */
 
+import { encodeUuidPathSegment } from './utils/pathId';
+
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001';
+
+
+function conversationPath(conversationId) {
+  const safeId = encodeUuidPathSegment(conversationId, 'conversation ID');
+  return `${API_BASE}/api/conversations/${safeId}`;
+}
 
 async function responseError(response, fallback) {
   try {
@@ -35,9 +44,7 @@ export const api = {
   },
 
   async getConversation(conversationId) {
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}`
-    );
+    const response = await fetch(conversationPath(conversationId));
     if (!response.ok) {
       throw await responseError(response, 'Failed to get conversation');
     }
@@ -46,7 +53,7 @@ export const api = {
 
   async deleteConversation(conversationId) {
     const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}`,
+      conversationPath(conversationId),
       { method: 'DELETE' }
     );
     if (!response.ok) {
@@ -57,7 +64,7 @@ export const api = {
 
   async renameConversation(conversationId, title) {
     const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}`,
+      conversationPath(conversationId),
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -132,10 +139,16 @@ export const api = {
     return response.json();
   },
 
+  async getOrchestrationStrategies() {
+    const response = await fetch(`${API_BASE}/api/orchestration-strategies`);
+    if (!response.ok) {
+      throw await responseError(response, 'Failed to load orchestration strategies');
+    }
+    return response.json();
+  },
+
   async listDocuments(conversationId) {
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/documents`
-    );
+    const response = await fetch(`${conversationPath(conversationId)}/documents`);
     if (!response.ok) {
       throw await responseError(response, 'Failed to list documents');
     }
@@ -146,7 +159,7 @@ export const api = {
     const form = new FormData();
     form.append('file', file);
     const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/documents`,
+      `${conversationPath(conversationId)}/documents`,
       { method: 'POST', body: form, signal }
     );
     if (!response.ok) {
@@ -156,8 +169,9 @@ export const api = {
   },
 
   async deleteDocument(conversationId, documentId) {
+    const safeDocumentId = encodeUuidPathSegment(documentId, 'document ID');
     const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/documents/${documentId}`,
+      `${conversationPath(conversationId)}/documents/${safeDocumentId}`,
       { method: 'DELETE' }
     );
     if (!response.ok) {
@@ -168,7 +182,7 @@ export const api = {
 
   async estimateUsage(conversationId, content, options = {}, signal) {
     const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/usage-estimate`,
+      `${conversationPath(conversationId)}/usage-estimate`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -177,6 +191,8 @@ export const api = {
           models: options.models,
           chairman_model: options.chairmanModel,
           council_mode: options.councilMode,
+          orchestration_strategy: options.orchestrationStrategy,
+          output_hygiene: options.outputHygiene,
           review_profile: options.reviewProfile,
           include_context: options.includeContext,
           document_ids: options.documentIds,
@@ -192,7 +208,7 @@ export const api = {
 
   async sendMessage(conversationId, content, options = {}) {
     const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/message`,
+      `${conversationPath(conversationId)}/message`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -202,6 +218,8 @@ export const api = {
           models: options.models,
           chairman_model: options.chairmanModel,
           council_mode: options.councilMode,
+          orchestration_strategy: options.orchestrationStrategy,
+          output_hygiene: options.outputHygiene,
           review_profile: options.reviewProfile,
           role_assignments: options.roleAssignments,
           include_context: options.includeContext,
@@ -228,7 +246,7 @@ export const api = {
     onEvent
   ) {
     const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/message/stream`,
+      `${conversationPath(conversationId)}/message/stream`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -238,6 +256,8 @@ export const api = {
           models: options.models,
           chairman_model: options.chairmanModel,
           council_mode: options.councilMode,
+          orchestration_strategy: options.orchestrationStrategy,
+          output_hygiene: options.outputHygiene,
           review_profile: options.reviewProfile,
           role_assignments: options.roleAssignments,
           include_context: options.includeContext,

@@ -517,6 +517,13 @@ def _begin_run_sync(
                 "role": "user",
                 "content": str(request_payload.get("content") or ""),
             }
+            for key in (
+                "council_mode",
+                "orchestration_strategy",
+                "output_hygiene",
+            ):
+                if request_payload.get(key):
+                    user_message[key] = request_payload[key]
             document_metadata = _document_message_metadata(documents)
             if document_metadata:
                 user_message["documents"] = document_metadata

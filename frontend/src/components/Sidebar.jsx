@@ -136,6 +136,9 @@ export default function Sidebar({
   chairmanModel,
   councilModes,
   councilMode,
+  orchestrationStrategies,
+  orchestrationStrategy,
+  outputHygiene,
   reviewProfiles,
   reviewProfile,
   roleAssignments,
@@ -143,6 +146,8 @@ export default function Sidebar({
   onToggleModel,
   onChairmanChange,
   onCouncilModeChange,
+  onOrchestrationStrategyChange,
+  onOutputHygieneChange,
   onReviewProfileChange,
   onRoleAssignmentChange,
   onResetRoles,
@@ -158,6 +163,9 @@ export default function Sidebar({
   const [searchQuery, setSearchQuery] = useState('');
   const [providerStatusOpen, setProviderStatusOpen] = useState(false);
   const activeMode = councilModes.find((mode) => mode.id === councilMode);
+  const activeStrategy = orchestrationStrategies.find(
+    (strategy) => strategy.id === orchestrationStrategy
+  );
   const activeProfile = reviewProfiles.find((profile) => profile.id === reviewProfile);
   const defaultRoles = councilMode === 'review'
     ? (activeProfile?.reviewer_roles || activeMode?.default_roles || [])
@@ -362,6 +370,25 @@ export default function Sidebar({
 
             <div className="review-settings">
               <label className="chairman-field">
+                <span>Orchestration strategy</span>
+                <select
+                  value={orchestrationStrategy}
+                  onChange={(event) => onOrchestrationStrategyChange(event.target.value)}
+                  disabled={selectionDisabled}
+                >
+                  {orchestrationStrategies.map((strategy) => (
+                    <option key={strategy.id} value={strategy.id}>
+                      {strategy.name}{strategy.recommended ? ' · Recommended' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="review-profile-description">
+                {activeStrategy?.description
+                  || 'Choose how the selected models divide, review, and integrate work.'}
+              </p>
+
+              <label className="chairman-field">
                 <span>Council mode</span>
                 <select
                   value={councilMode}
@@ -446,6 +473,23 @@ export default function Sidebar({
                   <small>Include recent messages in the next council run</small>
                 </span>
               </label>
+
+              <label className="chairman-field">
+                <span>Output hygiene</span>
+                <select
+                  value={outputHygiene}
+                  onChange={(event) => onOutputHygieneChange(event.target.value)}
+                  disabled={selectionDisabled}
+                >
+                  <option value="clean_safe">Clean safe invisible characters</option>
+                  <option value="report">Report only</option>
+                  <option value="off">Off</option>
+                </select>
+              </label>
+              <p className="review-profile-description">
+                Conservative Unicode hygiene only. It does not rewrite, humanise,
+                remove metadata, or claim to detect authorship.
+              </p>
             </div>
 
             <CouncilPresets
@@ -453,6 +497,8 @@ export default function Sidebar({
               selectedModels={selectedModels}
               chairmanModel={chairmanModel}
               councilMode={councilMode}
+              orchestrationStrategy={orchestrationStrategy}
+              outputHygiene={outputHygiene}
               roleAssignments={roleAssignments}
               reviewProfile={reviewProfile}
               includeContext={includeContext}
