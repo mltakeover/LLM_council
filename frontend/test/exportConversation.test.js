@@ -23,3 +23,55 @@ test('conversation export includes all council stages', () => {
   assert.match(markdown, /Stage 2: Peer Rankings/);
   assert.match(markdown, /Final report/);
 });
+
+test('conversation export preserves managed workforce context and hygiene audit', () => {
+  const markdown = conversationToMarkdown({
+    title: 'Managed research',
+    messages: [
+      {
+        role: 'user',
+        content: 'Research the latest proposal',
+        orchestration_strategy: 'hybrid',
+        council_mode: 'fact_check',
+      },
+      {
+        role: 'assistant',
+        metadata: {
+          orchestration_strategy: 'hybrid',
+          workforce_plan: {
+            objective: 'Produce an evidence-aware recommendation.',
+            assignments: [{
+              model: 'ollama:qwen',
+              role: 'Research specialist',
+              deliverable: 'Identify the strongest evidence.',
+              success_criteria: ['Separate evidence from inference.'],
+            }],
+          },
+        },
+        stage1: [{
+          model: 'ollama:qwen',
+          role: 'Research specialist',
+          assignment: { deliverable: 'Identify the strongest evidence.' },
+          response: 'Specialist finding',
+        }],
+        stage2: [{ model: 'ollama:qwen', ranking: 'One unsupported claim requires review.' }],
+        stage3: {
+          model: 'ollama:qwen',
+          response: 'Master report',
+          output_hygiene: {
+            rendered_output: { removed_count: 2, reported_only_count: 1 },
+          },
+        },
+      },
+    ],
+  });
+
+  assert.match(markdown, /hybrid orchestration · fact_check mode/);
+  assert.match(markdown, /Manager Work Plan/);
+  assert.match(markdown, /Research specialist — ollama:qwen/);
+  assert.match(markdown, /Stage 1: Specialist Deliverables/);
+  assert.match(markdown, /Stage 2: Targeted Quality Assurance/);
+  assert.match(markdown, /Final Answer — Master/);
+  assert.match(markdown, /Safe invisible characters removed: 2/);
+  assert.match(markdown, /Directional\/joining characters reported only: 1/);
+});

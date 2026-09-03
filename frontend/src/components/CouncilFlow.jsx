@@ -5,6 +5,7 @@ import './CouncilFlow.css';
 const PHASE_LABELS = {
   ready: 'Ready',
   connecting: 'Connecting',
+  manager: 'Manager planning and work assignment',
   stage1: 'Collecting independent answers',
   stage2: 'Peer evaluation and ranking',
   stage3: 'Chairman synthesis',
@@ -81,7 +82,10 @@ function StageStatus({ label, status = 'pending', attempts, elapsed, usage, erro
 function RunDetails({ node, onClose }) {
   if (!node) return null;
   const stages = node.kind === 'chairman'
-    ? [{ key: 'stage3', label: 'Synthesis' }]
+    ? [
+        ...(node.manager === 'skipped' ? [] : [{ key: 'manager', label: 'Manager planning' }]),
+        { key: 'stage3', label: 'Synthesis' },
+      ]
     : [
         { key: 'stage1', label: 'Independent answer' },
         { key: 'stage2', label: 'Peer evaluation' },
@@ -175,7 +179,7 @@ function ModelNode({ model, selected, onSelect }) {
         </header>
         <div className="flow-model-stages">
           <StageStatus
-            label="Answer"
+            label={model.orchestrationStrategy === 'council' ? 'Answer' : 'Deliver'}
             status={model.stage1}
             attempts={model.attempts?.stage1}
             elapsed={model.elapsed?.stage1}
@@ -183,7 +187,7 @@ function ModelNode({ model, selected, onSelect }) {
             error={model.errors?.stage1}
           />
           <StageStatus
-            label="Evaluate"
+            label={model.orchestrationStrategy === 'hybrid' ? 'QA' : 'Evaluate'}
             status={model.stage2}
             attempts={model.attempts?.stage2}
             elapsed={model.elapsed?.stage2}
@@ -200,6 +204,7 @@ export default function CouncilFlow({ progress, isLoading = false }) {
   const [collapsed, setCollapsed] = useState(false);
   const [selection, setSelection] = useState(null);
   const phase = progress?.phase || (isLoading ? 'connecting' : 'ready');
+  const orchestrationStrategy = progress?.orchestrationStrategy || 'council';
   const models = progress?.models || [];
   const chairman = progress?.chairman || {};
   const selectedNode = selection?.kind === 'chairman'
@@ -220,14 +225,18 @@ export default function CouncilFlow({ progress, isLoading = false }) {
     0,
   );
   const settledTasks = modelTasks + Number(isSettled(chairman.stage3));
+  const managerTask = chairman.manager === 'skipped' ? 0 : 1;
+  const settledManagerTasks = managerTask && isSettled(chairman.manager) ? 1 : 0;
 
-  const totalTasks = models.length * 2 + (chairman.id ? 1 : 0);
-  const percent = totalTasks ? Math.round((settledTasks / totalTasks) * 100) : 0;
-  const live = ['connecting', 'stage1', 'stage2', 'stage3'].includes(phase);
+  const totalTasks = models.length * 2 + (chairman.id ? 1 : 0) + managerTask;
+  const completedTasks = settledTasks + settledManagerTasks;
+  const percent = totalTasks ? Math.round((completedTasks / totalTasks) * 100) : 0;
+  const live = ['connecting', 'manager', 'stage1', 'stage2', 'stage3'].includes(phase);
   const hasFailures = (
     models.some((model) => (
       model.stage1 === 'failed' || model.stage2 === 'failed'
     ))
+    || chairman.manager === 'failed'
     || chairman.stage3 === 'failed'
   );
   const phaseLabel = (
@@ -242,7 +251,7 @@ export default function CouncilFlow({ progress, isLoading = false }) {
         <div className="council-flow-title-wrap">
           <span className={`council-live-dot${live ? ' council-live-dot--active' : ''}`} aria-hidden="true" />
           <div>
-            <h2>LLM Council Flow</h2>
+            <h2>{orchestrationStrategy === 'council' ? 'LLM Council Flow' : 'LLM Workforce Flow'}</h2>
             <p>{progress?.error || phaseLabel}</p>
           </div>
         </div>
@@ -283,7 +292,7 @@ export default function CouncilFlow({ progress, isLoading = false }) {
                 {models.map((model) => (
                   <ModelNode
                     key={model.id}
-                    model={model}
+                    model={{ ...model, orchestrationStrategy }}
                     selected={selection?.kind === 'model' && selection.id === model.id}
                     onSelect={() => setSelection((previous) => (
                       previous?.kind === 'model' && previous.id === model.id
@@ -309,9 +318,23 @@ export default function CouncilFlow({ progress, isLoading = false }) {
               >
                 <div className="flow-chairman-crown" aria-hidden="true">◆</div>
                 <div className="flow-chairman-copy">
-                  <small>Chairman · final synthesis</small>
+                  <small>
+                    {orchestrationStrategy === 'council'
+                      ? 'Chairman · final synthesis'
+                      : 'Manager and Master'}
+                  </small>
                   <strong title={shortModelName(chairman.id)}>{shortModelName(chairman.id)}</strong>
                 </div>
+                {chairman.manager !== 'skipped' && (
+                  <StageStatus
+                    label="Plan"
+                    status={chairman.manager || 'pending'}
+                    attempts={chairman.attempts?.manager}
+                    elapsed={chairman.elapsed?.manager}
+                    usage={chairman.usage?.manager}
+                    error={chairman.errors?.manager}
+                  />
+                )}
                 <StageStatus
                   label="Synthesis"
                   status={chairman.stage3 || 'pending'}

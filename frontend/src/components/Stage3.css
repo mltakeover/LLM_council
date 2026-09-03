@@ -40,6 +40,19 @@
   font-weight: 600;
 }
 
+.output-hygiene-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 0 0 14px;
+  padding: 9px 11px;
+  border: 1px solid #b7ebcd;
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 11px;
+}
+
 .final-text {
   color: var(--color-text-secondary);
   line-height: 1.7;

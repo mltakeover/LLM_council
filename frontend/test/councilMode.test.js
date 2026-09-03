@@ -4,6 +4,8 @@ import {
   adaptivePanelNames,
   councilModeLabel,
   normalizeCouncilPreset,
+  normalizeOrchestrationStrategy,
+  normalizeOutputHygiene,
   normalizeRoleAssignments,
 } from '../src/utils/councilMode.js';
 
@@ -18,11 +20,31 @@ test('legacy presets receive general-purpose defaults', () => {
       name: 'Legacy',
       models: ['ollama:test'],
       councilMode: 'auto',
+      orchestrationStrategy: 'council',
+      outputHygiene: 'clean_safe',
       reviewProfile: 'general',
       roleAssignments: {},
       includeContext: true,
     },
   );
+});
+
+test('browser-persisted enum settings reject poisoned values', () => {
+  assert.equal(normalizeOrchestrationStrategy('workforce'), 'workforce');
+  assert.equal(normalizeOrchestrationStrategy('<img onerror=alert(1)>'), 'hybrid');
+  assert.equal(normalizeOrchestrationStrategy('invalid', 'council'), 'council');
+  assert.equal(normalizeOutputHygiene('report'), 'report');
+  assert.equal(normalizeOutputHygiene('javascript:alert(1)'), 'clean_safe');
+});
+
+test('presets cannot introduce unsupported persisted enum values', () => {
+  const preset = normalizeCouncilPreset({
+    orchestrationStrategy: '../poison',
+    outputHygiene: '<script>',
+  });
+
+  assert.equal(preset.orchestrationStrategy, 'council');
+  assert.equal(preset.outputHygiene, 'clean_safe');
 });
 
 test('role assignments from browser storage are bounded and sanitised', () => {

@@ -32,23 +32,64 @@ export function conversationToMarkdown(conversation) {
   conversation.messages.forEach((message) => {
     if (message.role === 'user') {
       lines.push('## 🧑 You', '', message.content, '');
+      if (message.orchestration_strategy || message.council_mode) {
+        lines.push(
+          `*${message.orchestration_strategy || 'council'} orchestration · ${message.council_mode || 'auto'} mode*`,
+          '',
+        );
+      }
       return;
     }
 
-    if (message.stage1?.length) {
-      lines.push('## Stage 1: Individual Responses', '');
-      message.stage1.forEach((result) => {
+    const strategy = message.metadata?.orchestration_strategy || 'council';
+    const plan = message.metadata?.workforce_plan;
+    if (plan?.objective) {
+      lines.push('## Manager Work Plan', '', plan.objective, '');
+      plan.assignments?.forEach((assignment) => {
         lines.push(
-          `### ${result.model}${formatDuration(result.elapsed_seconds)}`,
+          `### ${assignment.role} — ${assignment.model}`,
           '',
+          `- Deliverable: ${assignment.deliverable}`,
+        );
+        assignment.success_criteria?.forEach((criterion) => {
+          lines.push(`- Success criterion: ${criterion}`);
+        });
+        lines.push('');
+      });
+    }
+
+    if (message.stage1?.length) {
+      lines.push(
+        strategy === 'council'
+          ? '## Stage 1: Individual Responses'
+          : '## Stage 1: Specialist Deliverables',
+        '',
+      );
+      message.stage1.forEach((result) => {
+        const workerHeading = result.role
+          ? `${result.role} — ${result.model}`
+          : result.model;
+        lines.push(
+          `### ${workerHeading}${formatDuration(result.elapsed_seconds)}`,
+          '',
+        );
+        if (result.assignment?.deliverable) {
+          lines.push(`*Assigned deliverable: ${result.assignment.deliverable}*`, '');
+        }
+        lines.push(
           result.response,
-          ''
+          '',
         );
       });
     }
 
     if (message.stage2?.length) {
-      lines.push('## Stage 2: Peer Rankings', '');
+      lines.push(
+        strategy === 'hybrid'
+          ? '## Stage 2: Targeted Quality Assurance'
+          : '## Stage 2: Peer Rankings',
+        '',
+      );
       message.stage2.forEach((result) => {
         lines.push(
           `### ${result.model}${formatDuration(result.elapsed_seconds)}`,
@@ -60,9 +101,20 @@ export function conversationToMarkdown(conversation) {
     }
 
     if (message.stage3) {
-      const heading = `## Stage 3: Final Answer — Chairman: ${message.stage3.model}`
+      const owner = strategy === 'council' ? 'Chairman' : 'Master';
+      const heading = `## Stage 3: Final Answer — ${owner}: ${message.stage3.model}`
         + formatDuration(message.stage3.elapsed_seconds);
       lines.push(heading, '', message.stage3.response, '');
+      const hygiene = message.stage3.output_hygiene?.rendered_output;
+      if (hygiene && (hygiene.removed_count || hygiene.reported_only_count)) {
+        lines.push(
+          '### Output Hygiene',
+          '',
+          `- Safe invisible characters removed: ${hygiene.removed_count || 0}`,
+          `- Directional/joining characters reported only: ${hygiene.reported_only_count || 0}`,
+          '',
+        );
+      }
     }
   });
 

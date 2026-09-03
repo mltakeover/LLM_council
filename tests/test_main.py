@@ -172,9 +172,95 @@ def test_stream_stops_when_every_model_fails(tmp_path, monkeypatch) -> None:
         ]
 
 
+def test_hybrid_stream_emits_manager_and_targets_qa(tmp_path, monkeypatch) -> None:
+    storage.configure_database(str(tmp_path / "hybrid.db"), str(tmp_path / "legacy"))
+    models = ["ollama:a", "ollama:b"]
+
+    async def resolve_models(_request, include_title=False):
+        assert isinstance(include_title, bool)
+        return models, "ollama:a"
+
+    async def plan(*_args, **_kwargs):
+        return {
+            "objective": "Create an HLD",
+            "assignments": [
+                {
+                    "model": "ollama:a",
+                    "role": "Business analyst",
+                    "deliverable": "Scope",
+                    "success_criteria": ["Complete"],
+                    "dependencies": [],
+                },
+                {
+                    "model": "ollama:b",
+                    "role": "Security architect",
+                    "deliverable": "Controls",
+                    "success_criteria": ["Evidence-based"],
+                    "dependencies": ["Scope"],
+                },
+            ],
+            "qa_reviewers": ["ollama:b"],
+            "integration_notes": [],
+            "source": "manager",
+        }
+
+    async def stage1(_content, **_kwargs):
+        return [
+            {"model": "ollama:a", "role": "Business analyst", "response": "Scope"},
+            {"model": "ollama:b", "role": "Security architect", "response": "Controls"},
+        ]
+
+    async def stage2(_content, _results, **kwargs):
+        assert kwargs["reviewer_models"] == ["ollama:b"]
+        return [], {"Response A": "ollama:a", "Response B": "ollama:b"}
+
+    async def stage3(*_args, **_kwargs):
+        return {
+            "model": "ollama:a",
+            "response": "Final HLD",
+            "success": True,
+            "structured_report": None,
+        }
+
+    async def title(_content):
+        return "HLD Workforce"
+
+    monkeypatch.setattr(main, "_resolve_request_models", resolve_models)
+    monkeypatch.setattr(main, "create_workforce_plan", plan)
+    monkeypatch.setattr(main, "stage1_collect_responses", stage1)
+    monkeypatch.setattr(main, "stage2_collect_rankings", stage2)
+    monkeypatch.setattr(main, "stage3_synthesize_final", stage3)
+    monkeypatch.setattr(main, "generate_conversation_title", title)
+
+    with TestClient(main.app) as client:
+        conversation_id = client.post("/api/conversations", json={}).json()["id"]
+        response = client.post(
+            f"/api/conversations/{conversation_id}/message/stream",
+            json={
+                "run_id": str(uuid.uuid4()),
+                "content": "Create an HLD",
+                "models": models,
+                "orchestration_strategy": "hybrid",
+            },
+        )
+        conversation = client.get(
+            f"/api/conversations/{conversation_id}"
+        ).json()
+
+    assert response.status_code == 200
+    assert '"type": "manager_start"' in response.text
+    assert '"type": "manager_complete"' in response.text
+    assert '"targeted_qa": true' in response.text
+    assert '"type": "complete"' in response.text
+    assistant = conversation["messages"][-1]
+    assert assistant["metadata"]["orchestration_strategy"] == "hybrid"
+    assert assistant["metadata"]["qa_reviewers"] == ["ollama:b"]
+
+
 def test_general_purpose_catalog_endpoints() -> None:
     with TestClient(main.app) as client:
         modes = client.get("/api/council-modes")
+        strategies = client.get("/api/orchestration-strategies")
         evaluations = client.get("/api/evaluations/catalog")
 
     assert modes.status_code == 200
@@ -191,19 +277,34 @@ def test_general_purpose_catalog_endpoints() -> None:
         "fact_check",
     }
     assert len(evaluations.json()["cases"]) == 9
+    assert strategies.status_code == 200
+    assert strategies.json()["default"] == "hybrid"
+    assert {item["id"] for item in strategies.json()["strategies"]} == {
+        "council",
+        "workforce",
+        "hybrid",
+    }
 
 
 def test_send_request_validates_modes_and_role_bounds() -> None:
     with pytest.raises(ValueError):
         main.SendMessageRequest(content="Question", council_mode="unknown")
+    with pytest.raises(ValueError):
+        main.SendMessageRequest(content="Question", orchestration_strategy="unknown")
+    with pytest.raises(ValueError):
+        main.SendMessageRequest(content="Question", output_hygiene="aggressive")
 
     request = main.SendMessageRequest(
         content="Question",
         council_mode="debate",
+        orchestration_strategy="hybrid",
+        output_hygiene="report",
         role_assignments={"ollama:a": "  Evidence advocate  ", "ollama:b": ""},
     )
 
     assert request.council_mode == "debate"
+    assert request.orchestration_strategy == "hybrid"
+    assert request.output_hygiene == "report"
     assert request.role_assignments == {"ollama:a": "Evidence advocate"}
 
 
@@ -266,6 +367,37 @@ def test_usage_estimate_counts_only_stored_document_chunks(tmp_path) -> None:
             len("Review the attached design")
             + estimate["reviewed_document_characters"]
         )
+
+
+def test_usage_estimate_reflects_orchestration_call_pattern(tmp_path) -> None:
+    storage.configure_database(str(tmp_path / "strategy.db"), str(tmp_path / "legacy"))
+
+    with TestClient(main.app) as client:
+        conversation_id = client.post("/api/conversations", json={}).json()["id"]
+        base = {
+            "content": "Create an HLD",
+            "models": ["ollama:a", "ollama:b", "ollama:c"],
+            "include_context": False,
+        }
+        council_estimate = client.post(
+            f"/api/conversations/{conversation_id}/usage-estimate",
+            json={**base, "orchestration_strategy": "council"},
+        ).json()
+        workforce_estimate = client.post(
+            f"/api/conversations/{conversation_id}/usage-estimate",
+            json={**base, "orchestration_strategy": "workforce"},
+        ).json()
+        hybrid_estimate = client.post(
+            f"/api/conversations/{conversation_id}/usage-estimate",
+            json={**base, "orchestration_strategy": "hybrid"},
+        ).json()
+
+    assert council_estimate["estimated_calls"]["manager"] == 0
+    assert council_estimate["estimated_calls"]["stage2"] == 3
+    assert workforce_estimate["estimated_calls"]["manager"] == 1
+    assert workforce_estimate["estimated_calls"]["stage2"] == 0
+    assert hybrid_estimate["estimated_calls"]["manager"] == 1
+    assert hybrid_estimate["estimated_calls"]["stage2"] == 2
 
 
 def test_model_connectivity_probe_returns_safe_metrics(monkeypatch) -> None:

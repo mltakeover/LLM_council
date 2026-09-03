@@ -6,13 +6,13 @@ or operational behaviour changes.
 
 ## Product summary
 
-LLM Council is a personal, local-first, general-purpose deliberation application.
-A turn has three stages:
+LLM Council is a personal, local-first, general-purpose deliberation and managed
+workforce application. Task mode is separate from orchestration strategy:
 
-1. selected council models independently answer;
-2. successful answers are anonymised and peer-ranked;
-3. the selected Chairman returns a mode-adaptive structured report and Markdown
-   rendering.
+- Council: independent complete answers, anonymous peer ranking, Chairman synthesis.
+- Workforce: Manager decomposition, specialist worker contracts, Master synthesis.
+- Hybrid: Manager decomposition, specialist workers, up to two targeted QA
+  reviews, Master synthesis. This is the UI default.
 
 The explicit modes are Ask, Review, Debate, Decide, Brainstorm, Compare, Plan,
 Summarise, and Fact-check. Auto resolves one of those modes locally from the
@@ -55,12 +55,15 @@ CI is defined in `.github/workflows/ci.yml` and runs without provider keys.
   classification, timeouts, context and document limits.
 - `backend/providers.py`: direct SDK adapters, Ollama discovery, concurrency,
   retries, normalized results/errors, and model progress callbacks.
-- `backend/council.py`: prompts, document map/reduce, anonymous ranking,
-  consensus metrics, adaptive Chairman reports, and model recommendations.
+- `backend/council.py`: Manager planning, worker contracts, prompts, document
+  map/reduce, peer/QA review, contribution ledgers, adaptive Master/Chairman
+  reports, and model recommendations.
 - `backend/council_modes.py`: mode catalogue, deterministic Auto routing,
   evaluation criteria, default roles, and custom role resolution.
 - `backend/evaluations.py`: deterministic general-purpose evaluation catalogue
   and structured-output shape checks.
+- `backend/orchestration.py`: Council, Workforce, and Hybrid strategy catalogue.
+- `backend/output_hygiene.py`: bounded Unicode inspection and conservative cleanup.
 - `backend/main.py`: FastAPI models/routes, privacy validation, SSE orchestration,
   run lifecycle, uploads, usage estimates, and cancellation.
 - `backend/storage.py`: SQLite schema/migrations, conversations, messages,
@@ -126,6 +129,22 @@ de-anonymise only through persisted `label_to_model` metadata for display and
 aggregation. Reject invalid rankings rather than re-parsing a deliberately
 empty `parsed_ranking`. Do not invent a single winner for tied top-choice votes.
 
+Workforce and Hybrid run the Manager before Stage 1. An invalid or failed
+Manager response falls back to one deterministic assignment per model rather
+than aborting the run. Workforce skips Stage 2. Hybrid uses no more than two
+selected QA models and must not rank unlike specialist jobs. Store the plan,
+QA selection, worker contracts, and contribution ledger in turn metadata.
+
+### Output hygiene
+
+`output_hygiene` is a canonical run input with `clean_safe`, `report`, and `off`
+modes. Apply it to worker output before peer/QA processing and to the final
+Master/Chairman response. The safe cleaner must remain narrow. Do not silently
+add NFKC, homoglyph replacement, bidi stripping, script-joiner removal,
+variation-selector removal, emoji-tag removal, paraphrasing, statistical
+watermark claims, or file-metadata stripping. Retain original provider text
+when cleaning changes it and persist aggregate findings without logging content.
+
 ### Modes and roles
 
 The requested mode and resolved mode are different concepts. Preserve
@@ -133,12 +152,13 @@ The requested mode and resolved mode are different concepts. Preserve
 on the result. Auto routing must remain deterministic and local: it must not add
 an LLM call or transmit the request to another destination.
 
-Stage 1 and Stage 2 must use the same resolved mode. Mode-specific ranking
+All stages must use the same resolved mode. Mode-specific ranking
 criteria and Chairman output instructions must follow that mode. Specialist
 review-profile objectives and roles apply only when the resolved mode is
 Review. Custom roles are accepted only for selected model IDs, are length
 bounded, and are part of canonical run inputs so an idempotent retry cannot
-silently change perspectives.
+silently change perspectives. In Workforce and Hybrid they constrain the role
+that the Manager may assign.
 
 Fact-check mode has no live source retrieval. Prompts and schemas must permit
 `unverified` and must not turn missing evidence into confirmation.

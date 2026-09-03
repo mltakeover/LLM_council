@@ -121,6 +121,43 @@
   font-weight: 600;
 }
 
+.workforce-plan {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid #c7d7fe;
+  border-radius: 9px;
+  background: #f5f8ff;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.workforce-plan summary {
+  color: #3448a2;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.workforce-plan p,
+.workforce-plan ul {
+  margin: 8px 0 0;
+}
+
+.worker-assignment {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-left: 3px solid #8098f9;
+  background: #f8f9ff;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.worker-assignment ul {
+  margin: 3px 0 0;
+  padding-left: 18px;
+}
+
 .response-text {
   color: var(--color-text-secondary);
   line-height: 1.6;

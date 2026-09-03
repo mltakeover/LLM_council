@@ -151,6 +151,25 @@ export default function AdaptiveReport({ report }) {
         </section>
       )}
 
+      {report.contribution_ledger?.length > 0 && (
+        <details className="adaptive-contribution-ledger">
+          <summary>Contribution ledger · {report.contribution_ledger.length} workers</summary>
+          <div className="adaptive-card-grid">
+            {report.contribution_ledger.map((item, index) => (
+              <article key={`${item.worker_model}-${index}`}>
+                <span className={`claim-verdict claim-verdict--${item.decision}`}>
+                  {councilModeLabel(item.decision)}
+                </span>
+                <h6>{item.role}</h6>
+                <small>{item.worker_model}</small>
+                <p>{item.reason}</p>
+                <List values={item.evidence} />
+              </article>
+            ))}
+          </div>
+        </details>
+      )}
+
       {(
         report.key_points?.length > 0
         || report.themes?.length > 0

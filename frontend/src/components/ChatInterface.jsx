@@ -35,6 +35,8 @@ export default function ChatInterface({
   selectedModels,
   chairmanModel,
   councilMode,
+  orchestrationStrategy,
+  outputHygiene,
   reviewProfile,
   reviewProfiles,
   includeContext,
@@ -142,6 +144,8 @@ export default function ChatInterface({
             models: selectedModels,
             chairmanModel,
             councilMode,
+            orchestrationStrategy,
+            outputHygiene,
             reviewProfile,
             includeContext,
             documentIds: selectedDocumentIds,
@@ -166,6 +170,8 @@ export default function ChatInterface({
     selectedModels,
     chairmanModel,
     councilMode,
+    orchestrationStrategy,
+    outputHygiene,
     reviewProfile,
     includeContext,
     isLoading,
@@ -357,7 +363,9 @@ export default function ChatInterface({
                         <span>Running Stage 1: Collecting individual responses...</span>
                       </div>
                     )}
-                    {msg.stage1 && <Stage1 responses={msg.stage1} />}
+                    {msg.stage1 && (
+                      <Stage1 responses={msg.stage1} metadata={msg.metadata} />
+                    )}
 
                     {/* Stage 2 */}
                     {msg.loading?.stage2 && (
@@ -371,6 +379,7 @@ export default function ChatInterface({
                         rankings={msg.stage2}
                         labelToModel={msg.metadata?.label_to_model}
                         aggregateRankings={msg.metadata?.aggregate_rankings}
+                        orchestrationStrategy={msg.metadata?.orchestration_strategy}
                       />
                     )}
 
@@ -481,7 +490,7 @@ export default function ChatInterface({
       <form className="input-form" onSubmit={handleSubmit}>
         <div className="composer-tools">
           <span className="active-mode-badge">
-            Mode: {councilMode.replace('_', ' ')}
+            {orchestrationStrategy.replace('_', ' ')} · {councilMode.replace('_', ' ')}
           </span>
           <label className={`file-upload-button ${uploading ? 'disabled' : ''}`}>
             <input

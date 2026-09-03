@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-council"
-version = "0.4.0"
-description = "A local-first, general-purpose multi-model deliberation council"
+version = "0.5.0"
+description = "A local-first multi-model council and managed LLM workforce"
 readme = "README.md"
 requires-python = ">=3.10"
 
