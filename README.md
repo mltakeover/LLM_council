@@ -378,23 +378,48 @@ it, so the transformation remains auditable.
 
 ## Run the app
 
-Use two terminals from the repository root.
-
-Backend:
+The editable Python installation creates a cross-platform `llm-council`
+command. From the repository root, start the backend and frontend together:
 
 ```bash
 conda activate LLM_Council
-python -m uvicorn backend.main:app --reload --port 8001
+llm-council
 ```
 
-Frontend:
+The command uses the active Python environment, starts FastAPI on port `8001`
+and Vite on port `5173`, and stops both services when you press `Ctrl+C`. If
+frontend dependencies are missing, it runs the locked `npm ci` installation
+once. The equivalent command, which does not require reinstalling the console
+entry point after pulling this update, is:
+
+```bash
+python -m backend
+```
+
+Open the URL printed by Vite, normally `http://localhost:5173`.
+
+To open the browser automatically:
+
+```bash
+llm-council --open
+```
+
+The packaged launcher deliberately binds both services to fixed loopback
+addresses and ports. This keeps the one-command path local-only and prevents
+untrusted command-line values from reaching child processes. Start the two
+services separately when custom hosts or ports are required.
+
+For troubleshooting, the services can still be started separately in two
+terminals:
+
+```bash
+python -m uvicorn backend.main:app --reload --port 8001
+```
 
 ```bash
 cd frontend
 npm run dev
 ```
-
-Open the URL printed by Vite, normally `http://localhost:5173`.
 
 The backend health response is at `http://127.0.0.1:8001/`; interactive API
 documentation is at `http://127.0.0.1:8001/docs`.
