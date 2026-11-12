@@ -25,6 +25,9 @@ dependencies = [
     "python-multipart>=0.0.12",
 ]
 
+[project.scripts]
+llm-council = "backend.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3.0",
