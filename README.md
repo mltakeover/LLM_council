@@ -379,10 +379,16 @@ it, so the transformation remains auditable.
 ## Run the app
 
 The editable Python installation creates a cross-platform `llm-council`
-command. From the repository root, start the backend and frontend together:
+command. Complete the editable installation once from the repository root:
 
 ```bash
 conda activate LLM_Council
+python -m pip install -e .
+```
+
+After that, start the backend and frontend together with one command:
+
+```bash
 llm-council
 ```
 
@@ -423,6 +429,45 @@ npm run dev
 
 The backend health response is at `http://127.0.0.1:8001/`; interactive API
 documentation is at `http://127.0.0.1:8001/docs`.
+
+### Ports already in use
+
+The packaged launcher uses fixed local ports: `8001` for FastAPI and `5173`
+for Vite. If either port is already occupied, first open
+`http://localhost:5173`. If the Council loads, an earlier instance is already
+running and a second launch is unnecessary.
+
+Otherwise, identify the processes using the ports. On macOS or Linux:
+
+```bash
+lsof -nP -iTCP:8001 -sTCP:LISTEN
+lsof -nP -iTCP:5173 -sTCP:LISTEN
+```
+
+On Windows PowerShell:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8001,5173 -State Listen |
+  Select-Object LocalPort, OwningProcess
+```
+
+Stop an existing Council from its original terminal with `Ctrl+C`. If that
+terminal is no longer available, verify that the displayed process belongs to
+LLM Council before stopping its PID. On macOS or Linux:
+
+```bash
+ps -p <PID> -o pid,ppid,command
+kill -TERM <PID>
+```
+
+On Windows PowerShell:
+
+```powershell
+Get-Process -Id <PID>
+Stop-Process -Id <PID>
+```
+
+Run `llm-council --open` again after both ports are clear.
 
 ## Use the UI
 
